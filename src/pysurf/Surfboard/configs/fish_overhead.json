@@ -1,0 +1,39 @@
+{
+    "board": {
+        "type": "fish",
+        "finConfiguration": "twin",
+        "foamType": "pu",
+        "customParametersFile": null
+    },
+    "waves": {
+        "height": 2.0,
+        "period": 12.0,
+        "depth": 3.0
+    },
+    "rider": {
+        "mass": 75.0
+    },
+    "analysis": {
+        "run": true,
+        "showDashboard": true,
+        "speedRange": [0.5, 10.0],
+        "nSpeedPoints": 50
+    },
+    "viewer": {
+        "export": true,
+        "openInBrowser": false,
+        "outputDir": "src/pysurf/Surfboard/SurfViewer/data"
+    },
+    "waterSim": {
+        "run": false,
+        "preset": "small",
+        "configPath": null,
+        "export": true,
+        "outputDir": "src/pysurf/WaterSim/output"
+    },
+    "animations": {
+        "render": false,
+        "scenes": [],
+        "quality": "high"
+    }
+}

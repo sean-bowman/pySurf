@@ -10,7 +10,7 @@ Sean Bowman
 '''
 
 import os
-from computationalEngineering.parametricSurfboard.Surfboard import Surfboard
+from pysurf.parametricSurfboard.Surfboard import Surfboard
 
 os.system('cls' if os.name == 'nt' else 'clear')
 

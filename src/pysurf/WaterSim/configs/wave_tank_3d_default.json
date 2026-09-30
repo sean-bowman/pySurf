@@ -1,0 +1,40 @@
+{
+    "simulation": {
+        "type": "waveTank",
+        "dimensions": 3,
+        "endTime": 10.0,
+        "outputInterval": 0.05
+    },
+    "tank": {
+        "length": 5.0,
+        "width": 0.5,
+        "stillWaterDepth": 0.5,
+        "beachSlope": 0.1,
+        "beachStartRatio": 0.6
+    },
+    "wave": {
+        "height": 0.1,
+        "period": 1.5,
+        "rampCycles": 3,
+        "useSecondOrder": true
+    },
+    "sph": {
+        "particleSpacing": 0.02,
+        "smoothingLengthRatio": 1.3,
+        "kernelType": "cubicSpline",
+        "maxTimeStep": 0.0001
+    },
+    "fluid": {
+        "density": 1000.0,
+        "gravity": 9.81
+    },
+    "breaking": {
+        "velocityThreshold": 0.85,
+        "clusterRadius": 0.1,
+        "cooldownTime": 0.5
+    },
+    "viewer": {
+        "export": true,
+        "outputDir": "src/pysurf/Surfboard/SurfViewer/data"
+    }
+}

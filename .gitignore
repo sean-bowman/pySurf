@@ -8,17 +8,18 @@
 output/
 
 # Viewer exported data (generated artifacts)
-computationalEngineering/Surfboard/SurfViewer/data/
-computationalEngineering/Surfboard/SurfViewer/node_modules/
+src/pysurf/Surfboard/SurfViewer/data/
+src/pysurf/Surfboard/SurfViewer/node_modules/
 
 # Manim rendered output
-computationalEngineering/Surfboard/SurfAnimations/media/
+src/pysurf/Surfboard/SurfAnimations/media/
 
 # Python
 __pycache__/
 *.pyc
 .venv/
 venv/
+*.egg-info/
 
 # IDE
 .vs/
