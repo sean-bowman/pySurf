@@ -41,5 +41,8 @@ Thumbs.db
 # Internal notes (not for publication)
 objectives.md
 
+# Reference papers (copyrighted, kept locally only)
+docs/papers/
+
 # Temporary / generated job data
 temp/

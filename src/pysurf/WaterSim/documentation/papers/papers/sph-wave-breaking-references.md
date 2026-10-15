@@ -350,7 +350,7 @@ References behind `pysurf.bemSolver`, `pysurf.OverturningWave` and `pysurf.ReefB
 
 - **Citation:** Blenkinsopp, C.E. & Chaplin, J.R. (2008), Coastal Engineering 55(12), 967-974. doi:10.1016/j.coastaleng.2008.03.004
 - **URL:** <https://researchportal.bath.ac.uk/en/publications/the-effect-of-relative-crest-submergence-on-wave-breaking-over-su/>
-- **Accessed:** 2026-10-11; full text read from docs/papers/blenkinsopp2008.pdf on 2026-10-15
+- **Accessed:** 2026-10-11; full text read on 2026-10-15 from a local copy kept out of the repository
 - **Relevance:** The flume `ReefOverturn` reproduces and is checked against (tests/testValidationReefOverturn.py). The reference values are its points for H0/L0 = 0.0174, digitized from figures 6, 7, 10 and 11 by marker color.
 - **Key findings:**
   - Flume 17 m long and 0.44 m wide, 0.7 m deep, flap paddle with active absorption; reef 0.618 m high with a 1:10 face and a vertical back, its toe 3.8 m from the paddle; nine water levels give hc = 62 to 102 mm.
@@ -418,7 +418,7 @@ References behind `pysurf.bemSolver`, `pysurf.OverturningWave` and `pysurf.ReefB
 
 - **Citation:** Mostert, W. & Deike, L. (2020), J. Fluid Mech. 890, A12. doi:10.1017/jfm.2020.83
 - **URL:** <https://www.cambridge.org/core/journals/journal-of-fluid-mechanics/article/abs/inertial-energy-dissipation-in-shallowwater-breaking-waves/8B818C95BBB1C8BF2723DB611AFB9DCD>
-- **Accessed:** 2026-10-12, abstract only; full text read from docs/papers/mostert2020.pdf on 2026-10-14
+- **Accessed:** 2026-10-12, abstract only; full text read on 2026-10-14 from a local copy kept out of the repository
 - **Relevance:** Two-phase DNS of solitary waves breaking on slopes through the active breaking phase, the reference `SplashUp` is checked against (tests/testValidationSplashUp.py).
 - **Key findings:**
   - Active breaking runs from the face turning vertical, t1, to the first time after it that the kinetic energy has fallen to the potential, t2; the dissipation rate per unit crest width is the fall in mechanical energy over t2 - t1.
