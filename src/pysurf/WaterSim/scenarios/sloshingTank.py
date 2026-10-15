@@ -22,11 +22,13 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from pysurf.WaterSim import constants as const
-from pysurf.WaterSim.sph.protocols import SimulationConfig
-from pysurf.WaterSim.sph.particles import ParticleSystem
-from pysurf.WaterSim.sph.boundaryHandling import BoundaryHandler
+from pysurf import constants
+from pysurf.sphBoundaries import ContainerBoundary
+from pysurf.sphParticles import ParticleSystem, fillRegion
+from pysurf.sphSolver import SimulationConfig
 
+# Boundary particle layers behind each wall
+boundaryLayers: int = 3
 
 #--------------------------------------------------------------------#
 # -- Sloshing Tank Configuration -- #
@@ -99,27 +101,19 @@ class SloshingTankConfig:
             endTime=3.0,
         )
 
-
 #--------------------------------------------------------------------#
 # -- Scenario Creation -- #
 #--------------------------------------------------------------------#
 
-def createSloshingTank(
-    tankConfig: SloshingTankConfig,
-) -> tuple[SimulationConfig, ParticleSystem, BoundaryHandler]:
+def createSloshingTank(tankConfig: SloshingTankConfig) -> tuple[SimulationConfig, ParticleSystem, ContainerBoundary]:
+
     '''
-    Create a sloshing tank simulation from configuration.
 
-    Generates:
-    1. Fluid particles below a tilted free surface line
-    2. Boundary particles along container walls (open top)
-    3. SimulationConfig with domain and numerical parameters
+    Build a sloshing tank: fluid below a tilted free surface, boundary layers on the floor and
+    side walls, and the simulation configuration.
 
-    The tilted free surface is defined as:
-        y_surface(x) = fillHeight + tan(tiltAngle) * (x - tankWidth/2)
-
-    Particles below this line are created as fluid; those above
-    are empty space.
+    The free surface starts as the line y = fillHeight + tan(tilt) (x - W/2), which projects mostly
+    onto the first sloshing mode, so the tank sloshes at close to the first-mode period.
 
     Parameters:
     -----------
@@ -128,104 +122,36 @@ def createSloshingTank(
 
     Returns:
     --------
-    tuple[SimulationConfig, ParticleSystem, BoundaryHandler] :
-        Ready-to-run configuration, initialized particle system,
-        and boundary handler
+    tuple : (simulation configuration, particle system, container boundary)
+
     '''
+
     s = tankConfig.particleSpacing
-    w = tankConfig.tankWidth
-    h = tankConfig.tankHeight
-    fillHeight = tankConfig.fillRatio * h
-    tiltRad = math.radians(tankConfig.initialTiltDeg)
+    width, height = tankConfig.tankWidth, tankConfig.tankHeight
+    fillHeight = tankConfig.fillRatio * height
+    tilt = math.tan(math.radians(tankConfig.initialTiltDeg))
 
-    # Domain bounds (container interior)
-    containerMin = np.array([0.0, 0.0])
-    containerMax = np.array([w, h])
+    containerMin, containerMax = np.array([0.0, 0.0]), np.array([width, height])
+    boundary = ContainerBoundary(containerMin, containerMax, s, nLayers = boundaryLayers, openTop = True)
 
-    #--------------------------------------------------------------------#
-    # Create boundary handler and generate boundary particles
-    #--------------------------------------------------------------------#
-    boundaryHandler = BoundaryHandler(
-        containerMin=containerMin,
-        containerMax=containerMax,
-        spacing=s,
-        nLayers=const.defaultBoundaryLayers,
-        dimensions=2,
-        openTop=True,
-    )
+    def belowSurface(points: np.ndarray) -> np.ndarray:
+        return points[:, 1] < fillHeight + tilt * (points[:, 0] - width / 2.0)
 
-    boundaryPositions, boundaryMasses = boundaryHandler.generateBoundaryParticles(
-        referenceDensity=const.referenceDensity,
-    )
-    nBoundary = len(boundaryPositions)
-
-    #--------------------------------------------------------------------#
-    # Create fluid particles below tilted free surface
-    #--------------------------------------------------------------------#
-
-    # Generate candidate grid positions inside the container
-    xCoords = np.arange(s / 2.0, w, s)
-    yCoords = np.arange(s / 2.0, h, s)
-    xx, yy = np.meshgrid(xCoords, yCoords, indexing='xy')
-    candidatePositions = np.column_stack([xx.ravel(), yy.ravel()])
-
-    # Tilted free surface: y_surface(x) = fillHeight + tan(tilt) * (x - w/2)
-    # Particles below this line are fluid
-    xCentered = candidatePositions[:, 0] - w / 2.0
-    surfaceY = fillHeight + math.tan(tiltRad) * xCentered
-    fluidMask = candidatePositions[:, 1] < surfaceY
-
-    fluidPositions = candidatePositions[fluidMask]
-    nFluid = len(fluidPositions)
-
-    # Particle mass from spacing and density
-    particleVolume = s ** 2
-    fluidMass = const.referenceDensity * particleVolume
-
-    #--------------------------------------------------------------------#
-    # Combine fluid and boundary particles
-    #--------------------------------------------------------------------#
-
-    nTotal = nFluid + nBoundary
-    positions = np.vstack([fluidPositions, boundaryPositions])
-    velocities = np.zeros((nTotal, 2))
-    accelerations = np.zeros((nTotal, 2))
-    densities = np.full(nTotal, const.referenceDensity)
-    pressures = np.zeros(nTotal)
-    masses = np.concatenate([
-        np.full(nFluid, fluidMass),
-        boundaryMasses,
-    ])
-    isFluid = np.concatenate([
-        np.ones(nFluid, dtype=bool),
-        np.zeros(nBoundary, dtype=bool),
-    ])
-
-    particles = ParticleSystem(
-        positions=positions,
-        velocities=velocities,
-        accelerations=accelerations,
-        densities=densities,
-        pressures=pressures,
-        masses=masses,
-        isFluid=isFluid,
-    )
-
-    #--------------------------------------------------------------------#
-    # Build simulation config
-    #--------------------------------------------------------------------#
+    fluidPositions = fillRegion(belowSurface, containerMin, containerMax, s)
+    particles = ParticleSystem.assemble(fluidPositions, boundary.positions(), s, constants.freshwaterDensity)
 
     simConfig = SimulationConfig(
-        domainMin=containerMin,
-        domainMax=containerMax,
-        particleSpacing=s,
-        smoothingLengthRatio=tankConfig.smoothingLengthRatio,
-        referenceDensity=const.referenceDensity,
-        gravity=np.array([0.0, -const.gravity]),
-        endTime=tankConfig.endTime,
-        outputInterval=tankConfig.outputInterval,
-        dimensions=2,
-        kernelType='cubicSpline',
+        domainMin            = containerMin,
+        domainMax            = containerMax,
+        particleSpacing      = s,
+        smoothingLengthRatio = tankConfig.smoothingLengthRatio,
+        referenceDensity     = constants.freshwaterDensity,
+        gravity              = np.array([0.0, -constants.gravity]),
+        endTime              = tankConfig.endTime,
+        outputInterval       = tankConfig.outputInterval,
+        dimensions           = 2,
+        kernelType           = 'cubicSpline',
+        initialSurface       = lambda x: fillHeight + tilt * (x - width / 2.0),
     )
 
-    return (simConfig, particles, boundaryHandler)
+    return (simConfig, particles, boundary)

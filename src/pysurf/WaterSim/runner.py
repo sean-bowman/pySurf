@@ -24,15 +24,10 @@ import time as timeModule
 
 import numpy as np
 
-from pysurf.WaterSim import constants as const
-from pysurf.WaterSim.sph.protocols import SimulationConfig, SimulationState
-from pysurf.WaterSim.sph.wcsphSolver import WcsphSolver
-from pysurf.WaterSim.sph.particles import ParticleSystem
-from pysurf.WaterSim.sph.boundaryHandling import BoundaryHandler
+from pysurf.sphSolver import SimulationState, WcsphSolver
 from pysurf.WaterSim.scenarios.sloshingTank import SloshingTankConfig, createSloshingTank
 from pysurf.WaterSim.scenarios.numericalWaveTank import WaveTankConfig, createNumericalWaveTank
 from pysurf.WaterSim.export.frameExporter import FrameExporter
-
 
 #--------------------------------------------------------------------#
 # -- CLI Argument Parser -- #
@@ -69,7 +64,6 @@ def buildParser() -> argparse.ArgumentParser:
     )
 
     return parser
-
 
 #--------------------------------------------------------------------#
 # -- Runner Class -- #
@@ -195,7 +189,7 @@ class WaterSimRunner:
         print('  SCENARIO SETUP')
         print('-' * 62)
 
-        simConfig, particles, boundaryHandler = createSloshingTank(tankConfig)
+        simConfig, particles, boundary = createSloshingTank(tankConfig)
 
         print(f'  Tank Width:        {tankConfig.tankWidth:8.3f} m')
         print(f'  Tank Height:       {tankConfig.tankHeight:8.3f} m')
@@ -218,12 +212,12 @@ class WaterSimRunner:
 
         solver = WcsphSolver(
             config=simConfig,
-            boundaryHandler=boundaryHandler,
+            boundary=boundary,
         )
         solver.initialize(particles)
 
         print(f'  Speed of Sound:    {solver.speedOfSound:8.2f} m/s')
-        print(f'  EOS constant B:    {solver._eosB:12.1f} Pa')
+        print(f'  EOS constant B:    {solver.eosStiffness:12.1f} Pa')
         print()
 
         # Record initial frame
@@ -352,7 +346,7 @@ class WaterSimRunner:
         result = createNumericalWaveTank(tankConfig)
         simConfig = result.config
         particles = result.particles
-        boundaryHandler = result.boundaryHandler
+        boundary = result.boundary
         waveMaker = result.waveMaker
         breakingDetector = result.breakingDetector
 
@@ -383,12 +377,12 @@ class WaterSimRunner:
 
         solver = WcsphSolver(
             config=simConfig,
-            boundaryHandler=boundaryHandler,
+            boundary=boundary,
         )
         solver.initialize(particles)
 
         print(f'  Speed of Sound:    {solver.speedOfSound:8.2f} m/s')
-        print(f'  EOS constant B:    {solver._eosB:12.1f} Pa')
+        print(f'  EOS constant B:    {solver.eosStiffness:12.1f} Pa')
         print()
 
         # Record initial frame
@@ -501,7 +495,6 @@ class WaterSimRunner:
             'breakingStats': breakingStats,
         }
 
-
 #--------------------------------------------------------------------#
 # -- CLI Entry Point -- #
 #--------------------------------------------------------------------#
@@ -543,7 +536,6 @@ def main() -> None:
             doExport=not args.no_export,
             exportDir=args.output_dir,
         )
-
 
 if __name__ == '__main__':
     main()

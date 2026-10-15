@@ -35,6 +35,6 @@
     },
     "viewer": {
         "export": true,
-        "outputDir": "src/pysurf/Surfboard/SurfViewer/data"
+        "outputDir": "src/pysurf/WaterSim/output"
     }
 }

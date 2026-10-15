@@ -2,10 +2,23 @@
 
 '''
 
-Water simulation module using Smoothed Particle Hydrodynamics (SPH).
+Ready-to-run SPH water simulations: scenarios, the command-line runner, and frame export.
 
-Sloshing tank simulations, dam breaks, and free-surface flow
-visualization for computational engineering education.
+The physics lives in pySurf's flat modules, which any simulation can use on its own:
+
+    waveTheory      closed-form wave mechanics and breaking criteria
+    bathymetry      bed profiles
+    sphKernels, sphNeighbors, sphParticles, sphBoundaries, sphSolver    the WCSPH engine
+    waveMakers      piston wave maker and solitary wave initial condition
+    waveBreaking    free surface, front face lean and runup measures
+
+This package assembles them into named problems:
+
+    scenarios/  sloshing tank and numerical wave tank
+    runner.py   `python -m pysurf.WaterSim`
+    export/     frame data as JSON
+
+The breaking solitary wave on a beach is `pysurf.BreakingWave`.
 
 Sean Bowman [02/05/2026]
 

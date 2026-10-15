@@ -380,7 +380,7 @@ Simulations can be configured via JSON files (loaded with `--config` or
     },
     "viewer": {
         "export": true,
-        "outputDir": "SurfViewer/data"
+        "outputDir": "src/pysurf/WaterSim/output"
     }
 }
 ```

@@ -21,9 +21,8 @@ from datetime import datetime
 
 import numpy as np
 
-from pysurf.WaterSim.sph.protocols import SimulationConfig, SimulationState
-from pysurf.WaterSim.sph.particles import ParticleSystem
-
+from pysurf.sphParticles import ParticleSystem
+from pysurf.sphSolver import SimulationConfig, SimulationState
 
 class FrameExporter:
     '''

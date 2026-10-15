@@ -5,18 +5,34 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pysurf"
 version = "0.1.0"
-description = "Computational engineering portfolio: parametric surfboard design, hydrodynamics, and SPH water simulation"
+description = "Computational engineering portfolio: parametric surfboard design and SPH water simulation"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",
     "scipy>=1.11",
+    "matplotlib>=3.7",
     "plotly>=5.18",
+    "pint>=0.24",
     "trimesh>=4.0",
 ]
 
 [project.optional-dependencies]
 viewer = ["dash>=2.14"]
 animations = ["manim>=0.18"]
+test = ["pytest>=7.0"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Lets the suite import pysurf from src/ without an editable install
+pythonpath = ["src"]
+# pySurf uses camelCase file and function names, so the default test_*.py
+# discovery pattern would match nothing.
+python_files = ["test*.py"]
+python_classes = ["Test*"]
+python_functions = ["test*"]
+# Validation runs take minutes; `pytest -m slow` runs them
+markers = ["slow: validation runs against a published reference, minutes each"]
+addopts = "-m 'not slow'"

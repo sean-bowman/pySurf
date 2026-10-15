@@ -15,6 +15,5 @@ from pysurf.WaterSim.scenarios.sloshingTank import SloshingTankConfig, createSlo
 from pysurf.WaterSim.scenarios.numericalWaveTank import (
     WaveTankConfig,
     WaveTankResult,
-    WaveTankBoundaryHandler,
     createNumericalWaveTank,
 )
