@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 import trimesh
 
-from pysurf.exports import py2cad, writeFile
+from pysurf.exports import py2cad, writeFile, writeStl
 
 def referenceStlBytes(x, y, z) -> bytes:
 
@@ -116,6 +116,33 @@ class TestPy2cad:
         py2cad(str(path), x.tolist(), y.tolist(), z.tolist())
 
         assert path.read_bytes() == referenceStlBytes(x, y, z)
+
+class TestWriteStl:
+
+    '''Binary STL from a triangle list.'''
+
+    # A unit tetrahedron, each face counterclockwise as seen from outside
+    vertices = np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    faces = np.array([[0, 2, 1], [0, 1, 3], [0, 3, 2], [1, 2, 3]])
+
+    def testAClosedSurfaceReadsBackWatertightAndOutward(self, tmp_path):
+
+        path = tmp_path / 'tetrahedron.stl'
+        writeStl(str(path), self.vertices, self.faces)
+        mesh = trimesh.load(str(path))
+
+        assert len(mesh.faces) == 4 and mesh.is_watertight and mesh.is_winding_consistent
+        assert mesh.volume == pytest.approx(1.0 / 6.0)
+
+    def testTheFacetsKeepTheirCornerOrder(self, tmp_path):
+
+        path = tmp_path / 'tetrahedron.stl'
+        writeStl(str(path), self.vertices.tolist(), self.faces.tolist())
+        raw = path.read_bytes()
+        corners = [np.array(struct.unpack('<9f', raw[84 + 50 * k + 12: 84 + 50 * k + 48])).reshape(3, 3)
+                   for k in range(4)]
+
+        assert np.allclose(corners, self.vertices[self.faces])
 
 class TestWriteFile:
 

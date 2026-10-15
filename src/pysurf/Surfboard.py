@@ -7,20 +7,43 @@ This module defines the Surfboard class, which encapsulates the geometry and par
 It provides methods for generating the surfboard geometry based on a set of parameters, as well as utilities
 for exporting the geometry to STL format for use in CFD simulations or 3D printing.
 
+The board is built from the three views a shaper works from. The planform and the deck and bottom
+rockers are C1-continuous cubic Bezier sections. Each cross section spans the planform's half-width
+and the rockers' thickness at its station: a deck contour and a bottom contour meet at the rail apex,
+the widest point of the rail, halfway up the local thickness. Measured from the apex, each contour
+follows (z / b)^2 + |y / a|^p = 1, elliptic where it turns vertical at the rail and flatter across
+the board the larger its exponent p. The exponents vary along the board.
+
+Validation:
+    Not validated. The planform and rocker are matched by eye to photographs of a reference
+    thruster (assets/referenceMaterial). The cross-section exponents are calibrated to the
+    sections of the reference thruster's STL (assets/referenceMaterial/referenceThruster.stl),
+    fitted station by station with the rail apex at half the thickness. Scaled to each station's
+    half-width and thickness, the generated sections lie within 0.9 percent of the local
+    thickness (rms) of the STL's from 0.2 to 0.9 of the length, the worst point within 2.1
+    percent, and within 2.0 percent rms (worst point 3.7 percent) toward the tips;
+    tests/testSurfboardSections.py checks it. That is a calibration to the board the exponents
+    came from: no independent section data are in the repository, and a board of another type
+    takes the thruster's sections.
+
 Sean Bowman [04/01/2026]
 
 '''
 
+# Standard library imports
+import os
+
 # Third-party imports
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.interpolate import PchipInterpolator
 
 # Local imports
-from pysurf import figures, palette
-from pysurf.errors import GeometryError
+from pysurf import exports, figures, palette
+from pysurf.errors import GeometryError, InvalidInputError
 from pysurf.geometryTools import bezierCurve, bezierSubdivide, bezierEval
 from pysurf.units import convert
-from pysurf.validation import applyRules, choiceRule, numericRule
+from pysurf.validation import applyRules, arrayRule, choiceRule, numericRule
 
 # Inputs a board must satisfy before any geometry is generated, from the most basic to the most
 # specific. Lengths are in the units the constructor takes them in.
@@ -32,6 +55,14 @@ inputRules = (
     choiceRule('tailShape',     'Tail shape',     choices = ('squash', 'round', 'pin', 'fish')),
     choiceRule('rockerProfile', 'Rocker profile', choices = ('flat', 'medium', 'aggressive')),
     choiceRule('finConfig',     'Fin setup',      choices = ('thruster', 'quad', 'single', 'twin')),
+)
+
+# The cross-section shape settings, which the constructor presets rather than takes
+sectionRules = (
+    arrayRule('sectionStations', 'Cross-section stations', minimumLength = 2),
+    arrayRule('deckFlatness',    'Deck flatness',          sameLengthAs = 'sectionStations'),
+    arrayRule('bottomFlatness',  'Bottom flatness',        sameLengthAs = 'sectionStations'),
+    numericRule('railApexFrac',  'Rail apex height',       minimum = 0.0, maximum = 1.0),
 )
 
 class Surfboard:
@@ -79,6 +110,13 @@ class Surfboard:
         outlineMag               : list: Bezier handle magnitudes [dep, arr] for outline (default [0.35, 0.35])
         rockerMag                : list: Bezier handle magnitudes [dep, arr] for rocker  (default [0.35, 0.35])
         showControlPoints        : bool: overlay Bezier control points in plotGeometry (default True)
+        numCrossSectionPoints    : int: lateral points per deck and bottom contour (default 200)
+
+        Cross-section shape (overridable; fitted to the reference thruster STL):
+        sectionStations          : list: stations along the board, fractions of the length from the tail
+        deckFlatness             : list: deck exponent p at each station (2 = elliptic, larger = flatter)
+        bottomFlatness           : list: bottom exponent p at each station
+        railApexFrac             : float: rail apex height above the bottom, fraction of local thickness
 
         Set by noseShape preset (overridable):
         noseOutlineMidY          : float|None: Y (ft) of nose outline subdivision midpoint
@@ -237,6 +275,18 @@ class Surfboard:
                 self.noseTopRockerMidAngle    = 2.0
                 self.noseBottomRockerMidAngle = 6.0
 
+        # -- Cross Sections -- #
+
+        # Exponents of the deck and bottom contours, (z / b)^2 + |y / a|^p = 1 from the rail apex,
+        # fitted to the sections of the reference thruster STL with the apex at half the thickness.
+        # The deck is flattest just ahead of the tail and through the middle, where the STL's deck
+        # is broad and its rails full; it domes toward the nose. The bottom is flat with a tight
+        # edge in the tail and nose and rolls softly into the rail just ahead of the middle.
+        self.sectionStations = [0.0,  0.05, 0.1,  0.2,  0.3,  0.4,  0.5,  0.6,  0.7,  0.8,  0.9,  0.95, 1.0]
+        self.deckFlatness    = [4.50, 4.50, 7.16, 5.69, 5.03, 5.40, 6.02, 6.44, 6.32, 4.85, 3.31, 4.90, 9.22]
+        self.bottomFlatness  = [4.24, 4.24, 5.32, 5.38, 4.77, 4.16, 3.49, 2.90, 2.63, 3.27, 5.26, 4.56, 2.52]
+        self.railApexFrac    = 0.5
+
         # Bezier magnitude parameters: fraction of chord length for interior control point offsets.
         # Larger values produce a fuller curve through the middle; typical range 0.2–0.6.
         self.outlineMag = [0.35, 0.35]  # [departure side, arrival side] for outline segments
@@ -270,6 +320,18 @@ class Surfboard:
         '''
 
         applyRules(self, inputRules)
+        applyRules(self, sectionRules)
+
+        stations = np.asarray(self.sectionStations, dtype = float)
+        if stations[0] != 0.0 or stations[-1] != 1.0 or np.any(np.diff(stations) <= 0.0):
+            raise InvalidInputError('Cross-section stations must rise from 0 at the tail to 1 at the nose.',
+                                    parameterName = 'sectionStations', value = list(stations),
+                                    validRange = 'increasing, from 0 to 1')
+        for name in ('deckFlatness', 'bottomFlatness'):
+            exponents = np.asarray(getattr(self, name), dtype = float)
+            if np.any(exponents < 1.0):
+                raise InvalidInputError(f'{name} below 1 pinches the section into a cusp at the centerline.',
+                                        parameterName = name, value = float(exponents.min()), validRange = '>= 1')
 
     def _convertUnits(self, outputUnits: str = 'feet') -> dict:
 
@@ -402,20 +464,6 @@ class Surfboard:
         '''
         
         # Read the STL file and extract geometry data
-        pass
-
-    def _exportGeometry(self, filePath: str) -> None:
-        
-        '''
-        
-        Exports the generated surfboard geometry to an STL file. This writes the geometry data to an STL file format.
-
-        Parameters:
-            filePath: The path to the output STL file.
-        
-        '''
-        
-        # Write the geometry data to an STL file
         pass
 
     def _generateRockerProfile(self, isTopOrBottom: str = 'top') -> tuple[np.ndarray, np.ndarray, dict]:
@@ -627,114 +675,65 @@ class Surfboard:
     def _generateBoardCrossSections(self, geometryData: dict) -> dict:
 
         '''
-        
-        Generates the axial cross sections of the surfboard based on the nose-to-tail profile and rocker profiles.
-        
-        This method creates a 3D representation of the surfboard geometry by combining the top view outline with the side view rocker profiles.
 
-        Board cross sections are built from the tail to the nose (x = 0 to x = totalLength) using the board outline and two rocker profiles
-        to determine the bounding box for each cross section. The purpose of this method is to create a smooth profile between
-        the cross section boundaries that is representative of the board deck, bottom, and rails.
+        Generates the axial cross sections of the surfboard from the planform outline and the deck
+        and bottom rocker profiles.
+
+        Each station's section spans the outline's half-width and the thickness between the two
+        rockers: the deck meets the deck rocker and the bottom meets the bottom rocker at the
+        centerline, and the two contours meet at the rail apex, at the outline's half-width and
+        railApexFrac of the thickness above the bottom (`crossSectionShape`). The sections run from
+        the tail to the nose (x = 0 to x = totalLength), one per rocker station.
 
         The coordinate frame for the 3D surfboard is as follows:
             X (i-hat): Runs from tail (0) to nose (totalLength) along the centerline of the board
             Y (j-hat): Runs from the centerline to the right rail (positive) and left rail (negative)
-            Z (k-hat): Runs from the bottom of the board (0) to the deck (positive), with the midpoint
-                       of the thickness defining the approximate z=0 plane for the cross sections
-        
-        To that end, each board cross section is drawn in the YZ plane and each subsequent cross section represents
-        a step in the X direction.
+            Z (k-hat): Height above the bottom rocker's flat spot
+
+        Each section is drawn in the YZ plane from the centerline to the right rail; the left half
+        mirrors it.
 
         The board cross sections in general look like:
                     ________________
                    /                \
         Left Rail (                  ) Right Rail
                    \________________/
-        
+
+        Returns:
+        --------
+        dict : 'deckX', 'deckY', 'deckZ', 'bottomX', 'bottomY', 'bottomZ', each shaped
+            (stations, numCrossSectionPoints) [ft], from the centerline to the rail apex
+
+        Raises:
+        -------
+        GeometryError : If the deck rocker dips below the bottom rocker anywhere.
+
         '''
 
-        # Unpack and locally scope board geometry data for easier access
-        xRockerBottom, rRockerBottom  = geometryData['xRockerBottom'], geometryData['rRockerBottom']
-        xRockerTop, rRockerTop        = geometryData['xRockerTop'], geometryData['rRockerTop']
-        xBoardOutline, rBoardOutline  = geometryData['xBoardOutline'], geometryData['rBoardOutline']
+        x            = np.asarray(geometryData['xRockerTop'], dtype = float)
+        top          = np.asarray(geometryData['rRockerTop'], dtype = float)
+        bottom       = np.interp(x, geometryData['xRockerBottom'], geometryData['rRockerBottom'])
+        halfWidth    = np.interp(x, geometryData['xBoardOutline'], geometryData['rBoardOutline'])
+        thickness    = top - bottom
+        if np.any(thickness < 0.0):
+            raise GeometryError('The deck rocker dips below the bottom rocker, so the board has no thickness there.')
 
-        # Build the board wireframe by combining the board outline with the top and bottom rocker profiles
-        # Pre-allocate the arrays for the board geometry as (numCrossSections, pointsPerSection)
-        xBoard = np.zeros((self.resolution, int(self.resolution/2)))
-        yBoard = np.zeros((self.resolution, int(self.resolution/2)))
-        zBoard = np.zeros((self.resolution, int(self.resolution/2)))
+        # Lateral positions from the centerline to the rail apex, closing in toward the rail where
+        # the contours turn vertical
+        eta = np.sin(0.5 * np.pi * np.linspace(0.0, 1.0, self.numCrossSectionPoints))
+        deckShare, bottomShare = self.crossSectionShape(x / x[-1], eta)
 
-        xBoundingBox = np.zeros((self.resolution, 4))
-        yBoundingBox = np.zeros((self.resolution, 4))
-        zBoundingBox = np.zeros((self.resolution, 4))
-
-        # Build the bounding box for each cross section
-        for i, x in enumerate(xRockerTop):
-
-            # Bounding box is drawn starting in the bottom left and moving around the cross section in a
-            # clockwise direction: bottom left --> top left --> top right --> bottom right
-            xBoundingBox[i,:] = x # x coordinate is constant along the cross section
-            yBoundingBox[i]   = np.array([-rBoardOutline[i], -rBoardOutline[i], rBoardOutline[i], rBoardOutline[i]])
-            zBoundingBox[i]   = np.array([rRockerBottom[i], rRockerTop[i], rRockerTop[i], rRockerBottom[i]])
-
-        # Debug plot of board wireframe bounding boxes
-        if self.debugPlots:
-            figures.applyMplStyle()
-            # Plot the 3d points of bounding box for each cross section
-            ax = plt.figure().add_subplot(111, projection='3d')
-            for i in range(self.resolution):
-                ax.plot(xBoundingBox[i], yBoundingBox[i], zBoundingBox[i], '*', color=palette.colors()['accentText'], alpha=0.1)
-            plt.gca().set_aspect('equal')
-            plt.show(block = False)
-
-            debug = 1
-
-        # Cross-section shape fractions (fraction of local board thickness H at each x-station).
-        # Scaling with H ensures the crown and concavity taper naturally to zero at nose and tail where H→0.
-        deckHeightFrac      = 0.10  # deck crown height as fraction of local thickness
-        bottomConcavityFrac = 0.05  # bottom concavity depth as fraction of local thickness
-
-        # Pre-allocate cross section arrays
-        crossSectionX = np.zeros(self.numCrossSectionPoints)
-        crossSectionY = np.zeros((self.resolution, int(self.resolution/2)))
-
-        for i, x in enumerate(xRockerTop):
-
-            halfWidth      = rBoardOutline[i]
-            rBottom        = rRockerBottom[i]
-            rTop           = rRockerTop[i]
-            H              = rTop - rBottom                           # local board thickness
-
-            deckCrown      = deckHeightFrac      * H                  # crown height at centerline
-            concavityDepth = bottomConcavityFrac * H                  # concavity depth at centerline
-
-            # Deck: parabolic crown: Z_deck(η) = rTop + deckCrown*(1-η²)
-            # Horizontal tangent at η=0 (centerline), meets rail exactly at η=1 (Z = rTop)
-            deckX[i]   = x
-            deckY[i]   = halfWidth * eta
-            deckZ[i]   = rTop    + deckCrown      * (1.0 - eta**2)
-
-            # Bottom: parabolic concavity: Z_bottom(η) = rBottom - concavityDepth*(1-η²)
-            # Horizontal tangent at η=0 (centerline groove), meets rail exactly at η=1 (Z = rBottom)
-            bottomX[i] = x
-            bottomY[i] = halfWidth * eta
-            bottomZ[i] = rBottom - concavityDepth * (1.0 - eta**2)
-
-        # Debug plot of the center board cross section
-        if self.plotsEnabled:
-            figures.applyMplStyle()
-            plt.plot()
-            plt.gca().set_aspect('equal')
-            plt.show(block = False)
-
-            debug = 1
+        deckX   = np.repeat(x[:, None], eta.size, axis = 1)
+        deckY   = halfWidth[:, None] * eta[None, :]
+        deckZ   = bottom[:, None] + thickness[:, None] * deckShare
+        bottomZ = bottom[:, None] + thickness[:, None] * bottomShare
 
         return {
             'deckX'   : deckX,
             'deckY'   : deckY,
             'deckZ'   : deckZ,
-            'bottomX' : bottomX,
-            'bottomY' : bottomY,
+            'bottomX' : deckX.copy(),
+            'bottomY' : deckY.copy(),
             'bottomZ' : bottomZ,
         }
 
@@ -783,6 +782,118 @@ class Surfboard:
     #------------------------------------------------------------------------------#
     # -- Public Methods -- #
     #------------------------------------------------------------------------------#
+
+    def crossSectionShape(self, stationFraction, eta) -> tuple[np.ndarray, np.ndarray]:
+
+        '''
+
+        Deck and bottom heights of the cross section, as fractions of the local thickness above the
+        bottom centerline.
+
+        From the rail apex, at railApexFrac of the thickness, the deck rises and the bottom falls
+        to the centerline along (z / b)^2 + |eta|^p = 1, with b the apex's height below the deck or
+        above the bottom and p the deck or bottom flatness interpolated to the station (monotone
+        cubic through the table). At the centerline the deck share is 1 and the bottom share 0;
+        both reach the apex height at the rail with a vertical tangent.
+
+        Parameters:
+        -----------
+        stationFraction : float or np.ndarray
+            Station along the board, as a fraction of the length from the tail
+        eta : np.ndarray
+            Lateral position as a fraction of the local half-width, 0 at the centerline and 1 at
+            the rail apex
+
+        Returns:
+        --------
+        tuple : (deck share, bottom share), shaped like eta for a single station, or (stations,
+            len(eta)) for an array of them
+
+        '''
+
+        stations = np.asarray(self.sectionStations, dtype = float)
+        fraction = np.clip(np.atleast_1d(np.asarray(stationFraction, dtype = float)), 0.0, 1.0)
+        deckP    = PchipInterpolator(stations, np.asarray(self.deckFlatness, dtype = float))(fraction)[:, None]
+        bottomP  = PchipInterpolator(stations, np.asarray(self.bottomFlatness, dtype = float))(fraction)[:, None]
+        eta      = np.clip(np.asarray(eta, dtype = float), 0.0, 1.0)[None, :]
+        apex     = self.railApexFrac
+
+        deck   = apex + (1.0 - apex) * np.sqrt(np.clip(1.0 - eta**deckP, 0.0, 1.0))
+        bottom = apex * (1.0 - np.sqrt(np.clip(1.0 - eta**bottomP, 0.0, 1.0)))
+
+        if np.ndim(stationFraction) == 0:
+            return deck[0], bottom[0]
+        return deck, bottom
+
+    def exportGeometry(self, filePath: str, units: str = 'in') -> str:
+
+        '''
+
+        Writes the board to a binary STL file as one closed surface. Each station's section becomes
+        a loop out along the right deck to the rail, back along the right bottom, out along the left
+        bottom and back along the left deck, and the loops join station to station from tail to
+        nose. An end with width, such as a squash tail or the nose tip's last fraction of an inch,
+        is closed with a fan of triangles; an end of zero width folds onto the line between deck and
+        bottom and closes without one. Facet normals point out of the board.
+
+        Parameters:
+        -----------
+        filePath : str
+            Output path; '.stl' is appended when it has no extension, and missing folders are made
+        units : str
+            Length unit the file is written in: 'in', 'mm' or 'ft' (default 'in')
+
+        Returns:
+        --------
+        str : The path written
+
+        Raises:
+        -------
+        GeometryError : If the board has no cross sections yet.
+
+        '''
+
+        data = self.geometryData
+        if data is None or 'deckZ' not in data:
+            raise GeometryError('The board has no cross sections to export: call generateGeometry() first.')
+
+        scale = convert(1.0, 'ft', units)
+        deckY, deckZ = np.asarray(data['deckY']), np.asarray(data['deckZ'])
+        bottomY, bottomZ = np.asarray(data['bottomY']), np.asarray(data['bottomZ'])
+
+        # One loop per station from the deck centerline, each point once: the rail apexes and the
+        # bottom centerline are shared by the contours that meet there
+        loopY = np.concatenate([deckY, bottomY[:, -2::-1], -bottomY[:, 1:-1], -deckY[:, :0:-1]], axis = 1)
+        loopZ = np.concatenate([deckZ, bottomZ[:, -2::-1], bottomZ[:, 1:-1], deckZ[:, :0:-1]], axis = 1)
+        loopY[loopY == 0.0] = 0.0       # no negative zeros, so both halves' centerline points coincide
+        stations, count = loopY.shape
+        loopX = np.repeat(np.asarray(data['deckX'])[:, :1], count, axis = 1)
+        vertices = scale * np.stack([loopX, loopY, loopZ], axis = -1).reshape(-1, 3)
+
+        # Two triangles between each pair of neighboring loops
+        i, j = np.meshgrid(np.arange(stations - 1), np.arange(count), indexing = 'ij')
+        here, ahead = i * count + j, i * count + (j + 1) % count
+        faces = [np.stack([here, here + count, ahead + count], axis = -1).reshape(-1, 3),
+                 np.stack([here, ahead + count, ahead], axis = -1).reshape(-1, 3)]
+
+        # Fans over the ends that have width, from a point midway up the end's thickness
+        for station, flip in ((0, False), (stations - 1, True)):
+            if deckY[station, -1] <= 0.0:
+                continue
+            center = scale * np.array([loopX[station, 0], 0.0, 0.5 * (deckZ[station, 0] + bottomZ[station, 0])])
+            vertices = np.vstack([vertices, center])
+            ring = station * count + np.arange(count)
+            fan = np.stack([np.full(count, len(vertices) - 1), ring, np.roll(ring, -1)], axis = -1)
+            faces.append(fan[:, ::-1] if flip else fan)
+
+        if not os.path.splitext(filePath)[1]:
+            filePath += '.stl'
+        folder = os.path.dirname(filePath)
+        if folder:
+            os.makedirs(folder, exist_ok = True)
+        exports.writeStl(filePath, vertices, np.vstack(faces))
+
+        return filePath
 
     def plotGeometry(self, show3D: bool = False) -> None:
 

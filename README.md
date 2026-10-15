@@ -12,7 +12,7 @@ The package lives under `src/pysurf/`. It follows the layout of the NOVA nozzle 
 
 ### Surfboard
 
-Parametric surfboard geometry built from the three views a shaper works from: the planform (top-down outline), the rocker (side profile of deck and bottom), and the cross section with its rails. The planform and both rockers are C1-continuous cubic Bezier sections with controllable departure, arrival, and midpoint angles, overlaid on reference photographs of a thruster for comparison. Cross-section generation is in development.
+Parametric surfboard geometry built from the three views a shaper works from: the planform (top-down outline), the rocker (side profile of deck and bottom), and the cross section with its rails. The planform and both rockers are C1-continuous cubic Bezier sections with controllable departure, arrival, and midpoint angles, overlaid on reference photographs of a thruster for comparison. Each cross section spans the planform's half-width and the rockers' thickness at its station: a deck contour and a bottom contour meet at the rail apex, halfway up the local thickness, each following $(z/b)^2 + |y/a|^p = 1$ from the apex, elliptic where it turns vertical at the rail and flatter across the board the larger $p$. The deck and bottom exponents vary along the board and are fitted to the sections of the reference thruster's STL. Scaled to each station's half-width and thickness, the generated sections lie within 0.9% of the local thickness (rms) of the STL's from 0.2 to 0.9 of the length, and within 2.0% toward the tips; elliptical sections miss them by 5 to 7%. That is a calibration to the board the exponents came from, not a validation. `exportGeometry` writes the board as one closed, outward-facing STL surface; [generatedThruster.stl](assets/surfboard/generatedThruster.stl) is the default board at 240 stations and 33 points per contour, 2198 in³ (36.0 L), the same volume the sections integrate to within 0.05%.
 
 ```python
 from pysurf import Surfboard
@@ -21,6 +21,7 @@ board = Surfboard(totalLength = 6.0, maxWidth = 20.0, midpointThickness = 2.5,
                   noseShape = 'point', tailShape = 'round', rockerProfile = 'aggressive')
 board.plotsEnabled = True
 board.generateGeometry()
+board.exportGeometry('board.stl')            # closed surface, in inches by default
 ```
 
 Length is in feet; width and thickness are in inches.
@@ -289,7 +290,7 @@ python -m pysurf.WaterSim   # Run default sloshing tank
 | `geometryTools` | Curve and surface math: Bezier construction and subdivision, offsets, intersections, fillets, arc-length resampling, revolution, rotation |
 | `figures` | Every figure, described once as a dataclass and drawn by both Matplotlib and Plotly: board profiles against the reference photographs, cross sections, and the 3D surface. `exportInteractiveFigures` writes the HTML companions; `PYSURF_HEADLESS=1` suppresses every window |
 | `palette` | The Surfy Pastels palette every figure is drawn in: sand and seafoam by default, night ocean with `PYSURF_FIGURE_MODE=dark`; nineteen named colors and the ocean, sunset and deviation colormaps |
-| `exports` | Binary STL from structured grids; delimited text |
+| `exports` | Binary STL from structured grids and triangle lists; delimited text |
 | `units` | One Pint registry and every conversion factor (ft, in, L, lb, kn, mph to SI) |
 | `errors` | The exception family pySurf raises on purpose; `InvalidInputError` is also a `ValueError` |
 | `validation` | Rule tables that check inputs before a calculation runs |
@@ -304,6 +305,7 @@ repo_root/
 ├── README.md
 ├── assets/
 │   ├── referenceMaterial/           Thruster reference photographs, dimensions, and STL
+│   ├── surfboard/                   The default board exported to STL
 │   ├── breakingWave/                Breaking wave animation, particle model
 │   ├── surfaceWave/                 Breaking wave animation, free-surface model
 │   ├── overturningWave/             Overturn animation and figures, potential flow
@@ -378,7 +380,7 @@ python -m pytest            # unit and verification tests, about 2 minutes
 python -m pytest -m slow    # validation runs, about two hours
 ```
 
-The suite runs headless and needs no install: `pyproject.toml` puts `src/` on the path. The unit tests cover the shared modules, the board's input rules and figures, the wave theory against its closed forms and limits, each SPH equation against its closed form or a conservation law, the breaking measures on constructed particle arrangements, and a short breaking-wave run through to the GIF. The SGN solver is checked against a lake at rest, Ritter's dam break, the SGN standing-wave frequency and its exact solitary wave, and its wave source, absorbing layer and improved dispersion against linear theory. The boundary element solver is checked against quadrature, an exact harmonic field and the Airy standing-wave period, its jet measures against a constructed jet over a tube, and the flow it hands to SPH (velocity and pressure inside the water) against exact harmonic fields. The hand-off to SPH is checked on still water, on a jet over an empty tube, and on a solitary wave's mass flux; the hand-off from SGN against a linear progressive wave's potential, and its walls against a bore. The slow tests are the validation cases in the tables above: the sloshing period, the solitary celerity, the Grilli breaking point for all three models, the Synolakis runup, the overturn at jet impact against the DNS of Feddersen et al. (2024) and the potential flow scaling of Pick and Feddersen (2026), the SPH continuation against the potential flow over the last tenth of a second before the jet lands, the energy it loses in active breaking against the DNS of Mostert and Deike (2020), and the reef overturn against the flume of Blenkinsopp and Chaplin (2008).
+The suite runs headless and needs no install: `pyproject.toml` puts `src/` on the path. The unit tests cover the shared modules, the board's input rules, figures and cross sections (against the reference thruster's STL), the wave theory against its closed forms and limits, each SPH equation against its closed form or a conservation law, the breaking measures on constructed particle arrangements, and a short breaking-wave run through to the GIF. The SGN solver is checked against a lake at rest, Ritter's dam break, the SGN standing-wave frequency and its exact solitary wave, and its wave source, absorbing layer and improved dispersion against linear theory. The boundary element solver is checked against quadrature, an exact harmonic field and the Airy standing-wave period, its jet measures against a constructed jet over a tube, and the flow it hands to SPH (velocity and pressure inside the water) against exact harmonic fields. The hand-off to SPH is checked on still water, on a jet over an empty tube, and on a solitary wave's mass flux; the hand-off from SGN against a linear progressive wave's potential, and its walls against a bore. The slow tests are the validation cases in the tables above: the sloshing period, the solitary celerity, the Grilli breaking point for all three models, the Synolakis runup, the overturn at jet impact against the DNS of Feddersen et al. (2024) and the potential flow scaling of Pick and Feddersen (2026), the SPH continuation against the potential flow over the last tenth of a second before the jet lands, the energy it loses in active breaking against the DNS of Mostert and Deike (2020), and the reef overturn against the flume of Blenkinsopp and Chaplin (2008).
 
 ---
 

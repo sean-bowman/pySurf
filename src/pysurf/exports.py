@@ -6,6 +6,7 @@
 Writing geometry and data out in the forms other tools read.
 
     py2cad      Binary STL from a structured surface grid, for CAD and print preparation.
+    writeStl    Binary STL from a list of triangles, for closed surfaces a single grid cannot form.
     writeFile   Delimited text (.csv or .txt) from a 2D array, for spreadsheets and CAD sketches.
 
 ----------------------------------------------------------------------
@@ -43,8 +44,7 @@ def py2cad(filename: str, xData: np.ndarray | list, yData: np.ndarray | list, zD
 
     Each grid cell (i, j) becomes two facets, (i, j) -> (i, j+1) -> (i+1, j+1) and
     (i+1, j+1) -> (i+1, j) -> (i, j), written in row-major cell order. A facet with two coincident
-    corners has no normal, which the division would write to the file as NaN, so its normal is
-    written as zero instead: the format allows it and readers recompute normals from the vertices.
+    corners has no normal, so its normal is written as zero (see `_writeFacets`).
 
     Parameters:
     -----------
@@ -78,6 +78,50 @@ def py2cad(filename: str, xData: np.ndarray | list, yData: np.ndarray | list, zD
     lower = np.stack([points[1:, 1:], points[1:, :-1], points[:-1, :-1]], axis = -2)
     facets = np.stack([upper, lower], axis = 2).reshape(-1, 3, 3)
 
+    _writeFacets(filename, facets, b'Created by py2cad.py [Sean Bowman]')
+
+def writeStl(filename: str, vertices: np.ndarray | list, faces: np.ndarray | list) -> None:
+
+    '''
+
+    Export a triangulated surface to a binary .stl file.
+
+    Each face lists three vertex indices; the corner order sets the facet normal by the right-hand
+    rule, so faces listed counterclockwise as seen from outside give outward normals. A closed
+    surface whose faces share edges reads back watertight in tools that merge coincident vertices.
+
+    Parameters:
+    -----------
+    filename : str
+        Output file path. The .stl extension is appended if not provided.
+    vertices : np.ndarray | list
+        Vertex coordinates, shape (n, 3).
+    faces : np.ndarray | list
+        Vertex indices of each triangle, shape (m, 3).
+
+    Returns:
+    --------
+    None : A .stl file is created and saved to the specified filename location.
+
+    '''
+
+    if '.' not in filename:
+        filename += '.stl'
+
+    facets = np.asarray(vertices, dtype = float)[np.asarray(faces, dtype = int)]
+    _writeFacets(filename, facets, b'Created by pySurf [Sean Bowman]')
+
+def _writeFacets(filename: str, facets: np.ndarray, metadataString: bytes) -> None:
+
+    '''
+
+    Write facets, shape (m, 3 corners, 3 coordinates), as binary STL records behind an 80-byte
+    header. A facet with two coincident corners has no normal, which the division would write as
+    NaN, so its normal is written as zero instead: the format allows it and readers recompute
+    normals from the vertices.
+
+    '''
+
     # Facet normals from the right-hand rule on the corner order
     crossProduct = np.cross(facets[:, 1] - facets[:, 0], facets[:, 2] - facets[:, 0])
     magnitude = np.linalg.norm(crossProduct, axis = 1, keepdims = True)
@@ -88,7 +132,6 @@ def py2cad(filename: str, xData: np.ndarray | list, yData: np.ndarray | list, zD
     records['vertices'] = facets
 
     # .stl files start with 80 bytes of metadata, padded with spaces, then the facet count
-    metadataString = b'Created by py2cad.py [Sean Bowman]'
     metadataTitle = metadataString + b' ' * (80 - len(metadataString))
 
     with open(filename, 'wb') as fileID:
