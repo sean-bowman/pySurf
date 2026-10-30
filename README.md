@@ -48,7 +48,7 @@ Grilli et al.'s (1997) slope parameter $S_0 = 1.521 \tan\beta / \sqrt{H/d}$ pred
 
 #### Free-surface model (Serre-Green-Naghdi)
 
-![Solitary wave breaking on a 1:35 beach, Serre-Green-Naghdi](assets/surfaceWave/surfaceWave.gif)
+![Solitary wave breaking on a 1:35 beach, Serre-Green-Naghdi](examples/surfaceWave/surfaceWave.gif)
 
 ```python
 from pysurf.SurfaceBreakingWave import SurfaceBreakingWave
@@ -75,7 +75,7 @@ The breaking criteria are the published values, not tuned to Grilli: Tissier et 
 
 #### Overturning (boundary element potential flow)
 
-![Solitary wave overturning over a reef, potential flow](assets/overturningWave/overturningWave.gif)
+![Solitary wave overturning over a reef, potential flow](examples/overturningWave/overturningWave.gif)
 
 ```python
 from pysurf.bathymetry import Bathymetry
@@ -115,17 +115,17 @@ The GIF is a solitary wave of $H/d = 0.3$ breaking in open water over a 1:10 ree
 
 The breaking point is converged in resolution: $H_b/d$ is 0.504 and $h_b/d$ 0.359 at crest spacings of both $0.02d$ and $0.014d$. The remaining difference from Grilli comes from the starting wave: Grilli's is the exact potential flow solitary wave, this one the exact SGN wave with potential flow's vertical velocity structure added, which adjusts by about 1% in height over the first depths of travel. On the 1:35 slope the jet lands 0.36 s after breaking, over a tube $0.26d$ long and $0.28d$ high enclosing $0.035d^2$ of air, the same to 1% at a crest spacing of $0.014d$.
 
-![Overturning profiles of a solitary wave on a 1:35 slope](assets/overturningWave/grilliProfiles.png)
+![Overturning profiles of a solitary wave on a 1:35 slope](examples/overturningWave/grilliProfiles.png)
 
 The overturn is measured as Feddersen et al. (2023, 2024) and Pick and Feddersen (2026) measure it at jet impact: the area $A_O$ enclosed by the overturn boundary, the area $A_J$ of the jet (the water above the tube, where the surface is multi-valued in $x$), both over the square of the highest elevation $H_I$, and the length $L$, width $W$ and angle $\theta_O$ of a Longuet-Higgins (1982) curve fitted to the boundary. Feddersen et al.'s (2024) DNS reproduces in 2D the soliton of their field-scale experiments in the Surf Ranch wave pool. The model runs the same case from the same starting wave, a Green-Naghdi solitary wave of $a_0/h_0 = 0.6$, and meets the criteria set before the comparison for the impact location, height, overturn area, jet area and angle. $W/L$ fails against the DNS but matches the field measurement at zero wind, and Pick and Feddersen's potential flow gives 0.41 for this case, so on this measure the DNS stands apart from both. Across plane slopes the overturn follows Pick and Feddersen's potential flow fits in every measure but the jet area, which is up to 19% above their fit while 12% below the DNS; it grows fast in the last instants before impact, which each study fixes in its own way.
 
-![The Surf Ranch soliton at jet impact, with the fitted overturn curve](assets/overturningWave/surfRanchOverturn.png)
+![The Surf Ranch soliton at jet impact, with the fitted overturn curve](examples/overturningWave/surfRanchOverturn.png)
 
 Not validated: the solitary wave over the reef in the GIF. Blenkinsopp and Chaplin's (2008) reef flume ran periodic waves, which `ReefOverturn` runs (below), and Mead and Black's (2001) relation between seabed gradient and tube shape comes from photographs of surf breaks rather than controlled conditions.
 
 #### Splash-up (potential flow handed to SPH)
 
-![The Surf Ranch soliton's jet landing and splashing up, SPH continued from the potential flow](assets/splashUp/splashUp.gif)
+![The Surf Ranch soliton's jet landing and splashing up, SPH continued from the potential flow](examples/splashUp/splashUp.gif)
 
 ```python
 from pysurf.OverturningWave import OverturningWave
@@ -158,7 +158,7 @@ The flow after the impact is checked against the energy Mostert and Deike (2020)
 
 #### Reef break (swell, Serre-Green-Naghdi)
 
-![Swell breaking on a reef, Serre-Green-Naghdi](assets/reefBreak/reefBreak.gif)
+![Swell breaking on a reef, Serre-Green-Naghdi](examples/reefBreak/reefBreak.gif)
 
 ```python
 from pysurf.ReefBreak import ReefBreak
@@ -183,7 +183,7 @@ Not validated: breaking over the reef itself. Run in Blenkinsopp and Chaplin's (
 
 #### Reef overturn (SGN train handed to potential flow)
 
-![A regular wave overturning on Blenkinsopp and Chaplin's reef, hc = 77 mm, at jet impact](assets/reefOverturn/reefOverturn.png)
+![A regular wave overturning on Blenkinsopp and Chaplin's reef, hc = 77 mm, at jet impact](examples/reefOverturn/reefOverturn.png)
 
 ```python
 from pysurf.ReefOverturn import ReefOverturn
@@ -226,7 +226,7 @@ The incident wave matches the flume; nothing after it does. The SGN train reflec
 
 #### Particle model (SPH)
 
-![Solitary wave breaking on a 1:15 beach](assets/breakingWave/breakingWave.gif)
+![Solitary wave breaking on a 1:15 beach](examples/breakingWave/breakingWave.gif)
 
 ```python
 from pysurf.BreakingWave import BreakingWave
@@ -305,7 +305,8 @@ repo_root/
 ├── README.md
 ├── assets/
 │   ├── referenceMaterial/           Thruster reference photographs, dimensions, and STL
-│   ├── surfboard/                   The default board exported to STL
+│   └── surfboard/                   The default board exported to STL
+├── examples/
 │   ├── breakingWave/                Breaking wave animation, particle model
 │   ├── surfaceWave/                 Breaking wave animation, free-surface model
 │   ├── overturningWave/             Overturn animation and figures, potential flow
