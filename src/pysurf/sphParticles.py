@@ -126,6 +126,44 @@ class ParticleSystem:
 
         return cls.assemble(positions, np.empty((0, len(domainMin))), spacing, referenceDensity)
 
+    # -- Growth -- #
+    def append(self, positions: np.ndarray, velocities: np.ndarray, densities: np.ndarray, mass: float,
+               isFluid: bool = True) -> np.ndarray:
+
+        '''
+
+        Add particles at the end of the state, all of one mass and kind, with zero acceleration and
+        zero pressure until the solver next sets them.
+
+        Parameters:
+        -----------
+        positions, velocities : np.ndarray
+            Shape (M, dim) [m], [m/s]
+        densities : np.ndarray
+            Shape (M,) [kg/m^3]
+        mass : float
+            Mass of each new particle [kg]
+        isFluid : bool
+            Whether the new particles are fluid
+
+        Returns:
+        --------
+        np.ndarray : Indices of the new particles
+
+        '''
+
+        count = len(positions)
+        start = self.nParticles
+        self.positions = np.vstack([self.positions, positions])
+        self.velocities = np.vstack([self.velocities, velocities])
+        self.accelerations = np.vstack([self.accelerations, np.zeros_like(positions)])
+        self.densities = np.concatenate([self.densities, densities])
+        self.pressures = np.concatenate([self.pressures, np.zeros(count)])
+        self.masses = np.concatenate([self.masses, np.full(count, mass)])
+        self.isFluid = np.concatenate([self.isFluid, np.full(count, isFluid)])
+
+        return np.arange(start, start + count)
+
     # -- Counts -- #
     @property
     def nParticles(self) -> int:

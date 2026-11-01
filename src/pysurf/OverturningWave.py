@@ -37,17 +37,19 @@ Breaking point: validated against Grilli et al. (1997) for H/d = 0.3 on a 1:35 s
 breaking point defined as theirs is, the front face first vertical
 (tests/testValidationOverturning.py):
 
-    quantity    Grilli      boundary elements, crest spacing 0.02 d     error
-    Hb/d        0.476       0.504                                       +5.8 %
-    hb/d        0.345       0.359                                       +4.1 %
-    Hb/hb       1.380       1.402                                       +1.6 %
+    quantity    Grilli      exact start     error       SGN start       error
+    Hb/d        0.476       0.491           +3.2 %      0.504           +5.8 %
+    hb/d        0.345       0.350           +1.4 %      0.359           +4.1 %
+    Hb/hb       1.380       1.404           +1.7 %      1.402           +1.6 %
 
-The breaking point is converged in resolution (Hb/d 0.504 at crest spacings of 0.02 d and 0.014 d,
-hb/d 0.359 at both). The difference from Grilli is the starting wave: theirs is the exact potential
-flow solitary wave, this one the exact SGN wave with potential flow's vertical velocity structure,
-which adjusts by about 1 percent in height over the first depths of travel. The solver itself is
-checked in tests/testBemSolver.py against an exact harmonic function and the Airy standing-wave
-period.
+Grilli's wave starts as the exact potential flow solitary wave, as `startingWave = 'exact'` does;
+the default SGN wave carries more water at the same height (17 percent more at H/d = 0.6) and
+accounts for about half the difference. The breaking point is converged in resolution (from the
+SGN start, Hb/d 0.504 at crest spacings of 0.02 d and 0.014 d, hb/d 0.359 at both). On Guyenne and
+Grilli's (2006) 1:15 slope at H/d = 0.6 the exact start breaks at t sqrt(g / d) = 7.572 against
+their 7.629, its crest 0.680 against 0.680 (tests/testValidationRidgeOverturn.py). The solver
+itself is checked in tests/testBemSolver.py against an exact harmonic function and the Airy
+standing-wave period.
 
 Overturn at jet impact: validated against the two-phase DNS of Feddersen et al. (2024) for the Surf
 Ranch soliton, a0/h0 = 0.6 over a 0.0693 slope up to a flat 0.371 h0 deep, measured as they measure
@@ -251,6 +253,13 @@ class OverturningWave:
         Stretch of x, as (low, high) [m], in which the crest, the breaking face and the jet are
         sought; None for the whole tank. A starting surface may hold other waves, such as the bores
         behind a reef, that rise higher against a wall than the wave to follow.
+    recordTimes : sequence of float | None
+        Times at which a frame is recorded exactly [s], besides the regular frames; the step before
+        each is shortened to land on it. `frameAt` returns these frames.
+    startingWave : str
+        The solitary wave to start from: 'serre', the exact Serre-Green-Naghdi wave with potential
+        flow's vertical velocity structure, which sheds a small tail as it adjusts; or 'exact', the
+        exact potential flow wave (`waveTheory.exactSolitaryWave`), which travels unchanged
 
     '''
 
@@ -259,7 +268,8 @@ class OverturningWave:
                  bathymetry: Bathymetry | None = None, wallDepthRatio: float = 0.1, crestSpacingRatio: float = 0.02,
                  surfaceSpacingRatio: float = 0.08, frameInterval: float = 0.05, endTime: float | None = None,
                  startX: float | None = None, crestWindowRatio: float = 1.0, initialState: tuple | None = None,
-                 crestRange: tuple[float, float] | None = None) -> None:
+                 crestRange: tuple[float, float] | None = None, recordTimes=None,
+                 startingWave: str = 'serre') -> None:
 
         self.depth = depth                              # [m]
         self.waveHeight = waveHeight                    # [m]
@@ -274,6 +284,8 @@ class OverturningWave:
         self.crestWindowRatio = crestWindowRatio
         self.initialState = initialState
         self.crestRange = crestRange                    # [m]
+        self.recordTimes = sorted(float(time) for time in recordTimes) if recordTimes is not None else []
+        self.startingWave = startingWave
 
         self.bathymetry: Bathymetry | None = None
         self.solver: BemSolver | None = None
@@ -308,6 +320,9 @@ class OverturningWave:
                                 note = 'a solitary wave higher than this breaks before it reaches the slope')])
         if self.initialState is not None and self.customBathymetry is None:
             raise InvalidInputError('A starting surface needs the bed it lies over.', parameterName = 'bathymetry')
+        if self.startingWave not in ('serre', 'exact'):
+            raise InvalidInputError(f"Starting wave '{self.startingWave}' is not 'serre' or 'exact'.",
+                                    parameterName = 'startingWave', value = self.startingWave)
         if self.startX is not None and self.startX < self.halfLength:
             raise InvalidInputError(f'Starting crest position {self.startX} m is closer to the seaward wall than the '
                                     f'wave\'s half length, {self.halfLength:.3f} m.', parameterName = 'startX',
@@ -417,9 +432,12 @@ class OverturningWave:
         else:
             x = np.linspace(bathymetry.startX, bathymetry.endX,
                             int((bathymetry.endX - bathymetry.startX) / (0.005 * d)) + 1)
-            elevation = waveTheory.serreSolitaryWaveProfile(x, H, d, self.crestX)
+            if self.startingWave == 'exact':
+                elevation, potential = waveTheory.exactSolitarySurface(x, H, d, self.crestX)
+            else:
+                elevation = waveTheory.serreSolitaryWaveProfile(x, H, d, self.crestX)
+                potential = waveTheory.serreSolitarySurfacePotential(x, H, d, self.crestX)
             surface = np.column_stack([x, bathymetry.stillWaterLevel + elevation])
-            potential = waveTheory.serreSolitarySurfacePotential(x, H, d, self.crestX)
         self.solver.setSurface(surface, potential, regrid = True)
 
         self.frames, self.tracker = [], CrestTrack()
@@ -451,6 +469,7 @@ class OverturningWave:
         nextReport = solver.time + 1.0
         previousSlope, previousTime = 1.0, solver.time
         steepSlope = float(np.cos(np.radians(45.0)))
+        pending = [time for time in self.recordTimes if time > solver.time + 1e-12]
         started = timeModule.perf_counter()
 
         if progress:
@@ -460,7 +479,7 @@ class OverturningWave:
         while solver.time < stopTime:
             lastSurface, lastPotential, lastTime = solver.surface.copy(), solver.potential.copy(), solver.time
             try:
-                solver.step()
+                solver.step(maxTimeStep = pending[0] - solver.time if pending else None)
             except (np.linalg.LinAlgError, ValueError, MemoryError) as error:
                 solver.surface, solver.potential, solver.time = lastSurface, lastPotential, lastTime
                 self.stopReason = f'solver failed: {error}'
@@ -520,6 +539,9 @@ class OverturningWave:
                     self._recordFrame()
                     break
 
+            if pending and solver.time >= pending[0] - 1e-9:
+                solver.time = pending.pop(0)
+                self._recordFrame()
             if solver.time >= nextFrame:
                 self._recordFrame()
                 interval = self.frameInterval / 5.0 if slope < steepSlope else self.frameInterval
@@ -595,6 +617,16 @@ class OverturningWave:
             })
 
         return result
+
+    def frameAt(self, time: float) -> SurfaceSnapshot | None:
+
+        '''The frame recorded at `time` [s], one of `recordTimes`, or None if the run ended before it.'''
+
+        for frame in self.frames:
+            if abs(frame.time - time) <= 1e-9:
+                return frame
+
+        return None
 
     @property
     def jet(self):

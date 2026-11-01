@@ -74,3 +74,14 @@ def testDensityErrorIsTheLargestFluidDeparture():
     particles.densities[:] = [1000.0, 990.0, 1020.0, 1005.0]
 
     assert particles.maxDensityError(1000.0) == pytest.approx(0.02)
+
+def testAppendedParticlesJoinTheStateAtTheEnd():
+
+    particles = ParticleSystem.assemble(np.zeros((3, 3)), np.ones((2, 3)), 0.1, 1000.0)
+    members = particles.append(np.full((4, 3), 2.0), np.ones((4, 3)), np.full(4, 1010.0), 0.5, isFluid = False)
+
+    assert members.tolist() == [5, 6, 7, 8]
+    assert particles.nParticles == 9 and particles.nFluid == 3
+    assert particles.densities[members] == pytest.approx(1010.0)
+    assert particles.masses[members] == pytest.approx(0.5)
+    assert particles.accelerations.shape == (9, 3) and particles.pressures.shape == (9,)

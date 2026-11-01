@@ -269,3 +269,34 @@ def testSerreDispersionMatchesAiryInLongWavesAndFallsBelowInShortOnes():
     assert sgn[0] == pytest.approx(airy[0], rel = 1e-5)
     assert sgn[1] / airy[1] == pytest.approx(0.9924, abs = 1e-4)
     assert sgn[2] / airy[2] == pytest.approx(0.8682, abs = 1e-4)
+
+def testTheExactSolitaryWaveMatchesClamondAndDutykh():
+
+    # Clamond & Dutykh (2013), table 1: F = 1.274236297977903 gives a/d = 0.68196566738690 to
+    # fourteen digits (their 50-digit computation)
+    wave = waveTheory.babenkoSolitaryWave(1.274236297977903)
+
+    assert wave.amplitude == pytest.approx(0.68196566738690, abs = 5e-12)
+
+def testTheExactSolitaryWaveSpeedMatchesGuyenneAndGrilli():
+
+    # Guyenne & Grilli (2006): Tanaka's wave of H/d = 0.6 travels at c / sqrt(g d) = 1.25
+    assert waveTheory.exactSolitaryWave(0.6).froudeNumber == pytest.approx(1.25, abs = 5e-3)
+
+def testTheExactSolitaryWaveIsSymmetricAndSingleValued():
+
+    wave = waveTheory.exactSolitaryWave(0.6)
+    crest = len(wave.x) // 2
+
+    assert np.all(np.diff(wave.x) > 0.0)
+    assert wave.x[crest] == 0.0 and wave.potential[crest] == 0.0
+    assert wave.eta[crest + 1:crest + 200] == pytest.approx(wave.eta[crest - 1:crest - 200:-1], abs = 1e-12)
+    assert wave.potential[crest + 1:crest + 200] == pytest.approx(-wave.potential[crest - 1:crest - 200:-1], abs = 1e-12)
+
+def testTheExactSolitarySurfaceIsSampledAtTheCrestAndStartsAtZeroPotential():
+
+    x = np.linspace(0.0, 20.0, 2001)
+    eta, potential = waveTheory.exactSolitarySurface(x, 0.6, 1.0, crestX = 8.0)
+
+    assert eta.max() == pytest.approx(0.6, abs = 1e-6) and x[np.argmax(eta)] == pytest.approx(8.0)
+    assert potential[0] == 0.0 and np.all(np.diff(potential) > 0.0)

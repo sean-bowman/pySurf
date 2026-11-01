@@ -10,7 +10,8 @@ simulation state, so it can be called from a solver, a wave maker, a figure or a
 
     Linear (Airy) waves     dispersion, wavelength, phase and group speed, kinematics, energy
     Solitary waves          first-order (Boussinesq) profile, celerity, decay, particle velocity;
-                            the exact solitary wave of the Serre-Green-Naghdi equations
+                            the exact solitary wave of the Serre-Green-Naghdi equations; the exact
+                            solitary wave of fully nonlinear potential flow (Babenko's equation)
     Serre-Green-Naghdi      linear dispersion of the fully nonlinear, weakly dispersive equations
     Wave makers             Biesel piston transfer function
     Standing waves          rectangular-tank sloshing frequencies
@@ -50,6 +51,19 @@ closed-form volume 2 H / kappa. Higher-order solitary wave theory gives a slight
 at large H/d; the first-order wave is the standard initial condition for numerical breaking
 studies and sheds a small trailing tail as it adjusts.
 
+The exact potential flow solitary wave (`babenkoSolitaryWave`, `exactSolitaryWave`) is checked
+against Clamond and Dutykh's (2013) fourteen-digit amplitude for F = 1.274236297977903: the
+solver gives 0.6819656673857, 1.2e-12 from their 0.68196566738690. For H/d = 0.6 it gives
+F = 1.24999, against the c = 1.25 sqrt(g d) Guyenne and Grilli (2006) quote for Tanaka's wave. Set
+on the boundary element model's surface, it crosses the Surf Ranch case's flat bed at 3.9125 m/s
+in 1 m of water against its own 3.9144, 0.05 percent (tests/testValidationPeelingWave.py), its
+crest reading 0.600 to three decimals over the 12 depths before the reef. At H/d = 0.6 it carries 1.93 d^2 of water above still
+water, where the exact SGN wave of the same height carries 2.26 d^2: started from the SGN wave, a
+potential flow run on Guyenne and Grilli's 1:15 slope breaks 8 percent early and 6 percent high.
+
+Clamond, D. & Dutykh, D. (2013) -- Fast accurate computation of the fully nonlinear solitary
+    surface gravity waves, Computers & Fluids 84, 35-38.
+
 The breaking criteria are empirical or semi-empirical and carry the scatter of the data they came
 from. Grilli et al.'s slope parameter was derived from fully nonlinear potential flow computations
 validated against laboratory measurements, on slopes from 1:100 to 1:8.
@@ -61,6 +75,7 @@ Sean Bowman [10/11/2026]
 # Standard library imports
 from __future__ import annotations
 
+import functools
 import math
 from dataclasses import dataclass
 
@@ -327,6 +342,189 @@ def serreSolitarySurfacePotential(x: np.ndarray, height: float, depth: float, cr
     integrand = (mean - h**2 * meanXX / 3.0) + (-h * meanX) * slope
 
     return np.concatenate([[0.0], np.cumsum(0.5 * (integrand[1:] + integrand[:-1]) * np.diff(x))])
+
+#----------------------------------------------------------------------#
+# -- Exact Potential Flow Solitary Wave -- #
+#----------------------------------------------------------------------#
+
+# Fastest solitary wave Babenko's equation is solved for here; its amplitude is about 0.796 d
+# (Clamond & Dutykh 2013), and the Froude number is not single-valued in the amplitude above it
+babenkoFroudeLimit: float = 1.29421
+
+@dataclass(frozen = True)
+class ExactSolitaryWave:
+
+    '''
+
+    The solitary wave of fully nonlinear potential flow, in units of the depth d and sqrt(g d), with
+    the water far from the crest at rest and the wave moving toward +x.
+
+    Parameters:
+    -----------
+    froudeNumber : float
+        c / sqrt(g d) [-]
+    amplitude : float
+        Crest height above still water, over d [-]
+    x : np.ndarray
+        Surface positions from the crest, increasing, over d [-]
+    eta : np.ndarray
+        Surface elevation at x, over d [-]
+    potential : np.ndarray
+        Velocity potential along the surface at x, over d sqrt(g d) [-], zero at the crest
+
+    '''
+
+    froudeNumber: float
+    amplitude: float
+    x: np.ndarray
+    eta: np.ndarray
+    potential: np.ndarray
+
+def babenkoSolitaryWave(froudeNumber: float, nodes: int = 8192, tolerance: float = 1e-13,
+                        maxIterations: int = 5000) -> ExactSolitaryWave:
+
+    '''
+
+    The exact potential flow solitary wave of a given Froude number, by Clamond and Dutykh's (2013)
+    method.
+
+    A conformal map takes the water to the strip -d <= beta <= 0 in alpha + i beta, the surface to
+    beta = 0. The surface elevation eta(alpha) then satisfies Babenko's equation,
+
+        F^2 eta - C^-1{eta} = C^-1{eta C{eta}} + eta^2 / 2,
+
+    with C the operator of Fourier symbol k coth(k) (1 at k = 0), solved by Petviashvili's iteration
+    from the KdV-like wave (F^2 - 1) sech^2(kappa alpha / 2), F^2 = tan(kappa) / kappa, on a
+    periodic interval long enough for that wave to fall to 1e-17. The surface positions follow from
+    the same map, x = alpha + X, with dX/dalpha = C{eta}, and the potential in the frame where the
+    far water is at rest is F X.
+
+    Parameters:
+    -----------
+    froudeNumber : float
+        c / sqrt(g d), between 1 and `babenkoFroudeLimit`
+    nodes : int
+        Points on the periodic interval, a power of two
+    tolerance : float
+        Largest change of eta between iterations at convergence, over d
+    maxIterations : int
+        Iterations before giving up
+
+    Returns:
+    --------
+    ExactSolitaryWave : The wave, at every node of the interval
+
+    '''
+
+    from scipy.optimize import brentq
+
+    F2 = froudeNumber**2
+    if not 1.0 < froudeNumber < babenkoFroudeLimit:
+        raise ValueError(f'Froude number {froudeNumber} is outside (1, {babenkoFroudeLimit}).')
+    kappa = brentq(lambda k: math.tan(k) / k - F2, 1e-9, 0.5 * math.pi - 1e-9)
+    halfLength = (math.log(4.0 * (F2 - 1.0)) + 39.2) / kappa
+    alpha = np.linspace(-halfLength, halfLength, nodes, endpoint = False)
+    k = 2.0 * math.pi * np.fft.fftfreq(nodes, d = 2.0 * halfLength / nodes)
+    nonzero = k != 0.0
+    symbolC = np.ones(nodes)
+    symbolC[nonzero] = k[nonzero] / np.tanh(k[nonzero])
+    symbolInverse = 1.0 / symbolC
+    symbolL = F2 - symbolInverse
+
+    def apply(symbol: np.ndarray, field: np.ndarray) -> np.ndarray:
+        return np.fft.ifft(symbol * np.fft.fft(field)).real
+
+    eta = (F2 - 1.0) / np.cosh(0.5 * kappa * alpha)**2
+    for _ in range(maxIterations):
+        nonlinear = apply(symbolInverse, eta * apply(symbolC, eta)) + 0.5 * eta**2
+        linear = apply(symbolL, eta)
+        stabilizer = np.sum(eta * linear) / np.sum(eta * nonlinear)
+        updated = stabilizer**2 * apply(1.0 / symbolL, nonlinear)
+        change = float(np.max(np.abs(updated - eta)))
+        eta = updated
+        if change < tolerance:
+            break
+    else:
+        raise RuntimeError(f'Babenko iteration did not converge for F = {froudeNumber}: last change {change:.2e}.')
+
+    spectrum = np.fft.fft(eta)
+    periodic = np.zeros(nodes, dtype = complex)
+    periodic[nonzero] = -1j * spectrum[nonzero] / np.tanh(k[nonzero])
+    shift = np.fft.ifft(periodic).real + np.mean(eta) * alpha
+    crest = nodes // 2
+    shift -= shift[crest]
+
+    return ExactSolitaryWave(froudeNumber = froudeNumber, amplitude = float(eta[crest]), x = alpha + shift,
+                             eta = eta, potential = froudeNumber * shift)
+
+@functools.lru_cache(maxsize = 32)
+def exactSolitaryWave(heightRatio: float, nodes: int = 8192) -> ExactSolitaryWave:
+
+    '''
+
+    The exact potential flow solitary wave of amplitude H/d, its Froude number found to 1e-13 by
+    root finding on `babenkoSolitaryWave`.
+
+    Parameters:
+    -----------
+    heightRatio : float
+        H / d, up to about 0.79
+    nodes : int
+        Points on the periodic interval
+
+    Returns:
+    --------
+    ExactSolitaryWave : The wave
+
+    '''
+
+    from scipy.optimize import brentq
+
+    low = math.sqrt(1.0 + 0.8 * heightRatio)
+    high = min(math.sqrt(1.0 + 1.05 * heightRatio), babenkoFroudeLimit - 1e-9)
+    froude = brentq(lambda F: babenkoSolitaryWave(F, nodes).amplitude - heightRatio, low, high, xtol = 1e-13)
+
+    return babenkoSolitaryWave(froude, nodes)
+
+def exactSolitaryWaveSpeed(height: float, depth: float, gravity: float = constants.gravity) -> float:
+
+    '''Celerity of the exact potential flow solitary wave of height H [m/s].'''
+
+    return exactSolitaryWave(height / depth).froudeNumber * math.sqrt(gravity * depth)
+
+def exactSolitarySurface(x: np.ndarray, height: float, depth: float, crestX: float = 0.0,
+                         gravity: float = constants.gravity) -> tuple[np.ndarray, np.ndarray]:
+
+    '''
+
+    Surface elevation [m] and velocity potential along the surface [m^2/s] of the exact potential
+    flow solitary wave at positions x, the potential zero at the first point, as for
+    `serreSolitarySurfacePotential`.
+
+    Parameters:
+    -----------
+    x : np.ndarray
+        Increasing positions along the surface [m]
+    height, depth : float
+        Wave height H and still water depth d [m]
+    crestX : float
+        Crest position [m]
+
+    Returns:
+    --------
+    tuple[np.ndarray, np.ndarray] : (eta, phi) at x
+
+    '''
+
+    from scipy.interpolate import CubicSpline
+
+    wave = exactSolitaryWave(height / depth)
+    x = np.asarray(x, dtype = float)
+    xi = np.clip((x - crestX) / depth, wave.x[0], wave.x[-1])
+    eta = CubicSpline(wave.x, wave.eta)(xi) * depth
+    potential = CubicSpline(wave.x, wave.potential)(xi) * depth * math.sqrt(gravity * depth)
+
+    return eta, potential - potential[0]
 
 def serreAngularFrequency(wavenumber: ArrayLike, depth: float, gravity: float = constants.gravity,
                           alpha: float = 1.0) -> np.ndarray:

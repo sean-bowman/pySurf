@@ -4,8 +4,9 @@
 '''
 
 Smoke tests of pysurf.OverturningWave: inputs are checked, the default and reef beds are built, the
-starting surface is the SGN solitary wave and can start anywhere the wave fits, a short run records
-frames, the frames draw and write as a GIF, and an overturn draws with its fitted curve. The breaking
+starting surface is the SGN or the exact potential flow solitary wave and can start anywhere the
+wave fits, a short run records frames, including frames at requested times, the frames draw and
+write as a GIF, and an overturn draws with its fitted curve. The breaking
 point and the overturn are validated in tests/testValidationOverturning.py.
 
 Sean Bowman [10/11/2026]
@@ -110,3 +111,28 @@ def testAnOverturnDrawsWithItsFittedCurve(shortRun):
 
     assert len(figure.axes) == 1
     assert wave.jet.fitError < 0.1 * wave.jet.overturnLength
+
+def testTheExactStartingSurfaceIsThePotentialFlowWave():
+
+    wave = OverturningWave(waveHeight = 0.6, startingWave = 'exact')
+    wave.build()
+    surface = wave.solver.surface
+    profile, _ = waveTheory.exactSolitarySurface(surface[:, 0], 0.6, 1.0, wave.crestX)
+
+    assert surface[:, 1] == pytest.approx(1.0 + profile, abs = 1e-6)
+
+def testAnUnknownStartingWaveIsRejected():
+
+    with pytest.raises(InvalidInputError):
+        OverturningWave(startingWave = 'cnoidal')
+
+def testFramesAreRecordedAtRequestedTimes():
+
+    times = [0.0137, 0.0811]
+    wave = OverturningWave(crestSpacingRatio = 0.05, surfaceSpacingRatio = 0.15, frameInterval = 1.0, recordTimes = times)
+    wave.run(endTime = 0.1, progress = False)
+
+    for time in times:
+        frame = wave.frameAt(time)
+        assert frame is not None and frame.time == time
+    assert wave.frameAt(0.05) is None

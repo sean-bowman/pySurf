@@ -15,7 +15,9 @@ full at the wall.
     ContainerBoundary   an axis-aligned box with an open top: a sloshing tank
     BedBoundary         a bed of any profile from `pysurf.bathymetry`, with optional vertical walls
                         at either end: a beach, or a channel; the offshore wall can be driven as a
-                        piston
+                        piston; in 3D extruded across a channel, walled or periodic
+    ShearedBedBoundary  a 3D bed whose depth contours run obliquely across the channel, each row of
+                        particles with an offshore wall driven as a piston of its own
 
 Each produces its particle positions and an `enforce` step the solver calls after every
 integration. Enforcement is the fallback, not the boundary condition: it catches the rare particle
@@ -172,11 +174,16 @@ class BedBoundary:
         Channel width for a 3D boundary [m]; None for 2D
     endWallTop : float | None
         Top of the shoreward wall [m], 2D only; None for no shoreward wall
+    periodic : bool
+        In 3D, the channel is periodic across its width instead of walled: the bed and end walls
+        span y in [0, width) at the lattice spacing, which must divide the width, and there are no
+        side walls. The solver's `periodicWidth` must be the same width.
 
     '''
 
     def __init__(self, bathymetry: Bathymetry, spacing: float, nLayers: int = 3,
-                 wallTop: float | None = None, width: float | None = None, endWallTop: float | None = None) -> None:
+                 wallTop: float | None = None, width: float | None = None, endWallTop: float | None = None,
+                 periodic: bool = False) -> None:
 
         self.bathymetry = bathymetry
         self.spacing = spacing      # [m]
@@ -184,6 +191,7 @@ class BedBoundary:
         self.wallTop = wallTop      # [m]
         self.width = width          # [m]
         self.endWallTop = endWallTop                # [m]
+        self.periodic = periodic and width is not None
         self.wallX = bathymetry.startX              # [m], the offshore wall, which a piston moves
         self._pistonMask: np.ndarray | None = None
 
@@ -222,6 +230,12 @@ class BedBoundary:
 
         s, layers = self.spacing, self.nLayers
         offsets = (np.arange(layers) + 0.5) * s
+
+        if self.periodic:
+            # One lattice row per particle column across the period, no side walls
+            across = np.arange(s / 2.0, self.width, s)
+            return np.column_stack([np.repeat(profile[:, 0], across.size), np.tile(across, len(profile)),
+                                    np.repeat(profile[:, 1], across.size)])
 
         # Bed and offshore wall repeated across the channel and under the side walls
         across = np.concatenate([-offsets[::-1], np.arange(s / 2.0, self.width, s), self.width + offsets])
@@ -303,7 +317,7 @@ class BedBoundary:
             velocities[under[into], -1] -= correction[:, 1]
 
         # Side walls of a 3D channel
-        if self.width is not None:
+        if self.width is not None and not self.periodic:
             for bound, side in ((clearance, 'low'), (self.width - clearance, 'high')):
                 if side == 'low':
                     outside = fluid[positions[fluid, 1] < bound]
@@ -325,3 +339,155 @@ class BedBoundary:
         beyond = fluid[positions[fluid, 0] > limit]
         positions[beyond, 0] = limit
         velocities[beyond, 0] = np.minimum(velocities[beyond, 0], 0.0)
+
+class ShearedBedBoundary:
+
+    '''
+
+    A bed whose depth contours run obliquely across a 3D channel: the elevation at (x, y) is the
+    profile's at x - shear y, a 2D bed sheared across the channel's width.
+
+    Particle rows sit at the lattice spacing across the channel, y = (r + 1/2) s for r = 0 to
+    rows - 1. Each row carries the 2D bed's layers and its offshore and shoreward walls
+    (`BedBoundary` in 2D), moved along x by shear y. Side walls close the channel at y = 0 and
+    y = width, every lattice height from below the bed to the wall top.
+
+    Each row's offshore wall is a piston of its own (`movePiston`), so rows whose water is at
+    different stages of the same flow can each have their wall follow it.
+
+    Parameters:
+    -----------
+    bathymetry : Bathymetry
+        The bed profile along x at y = 0
+    spacing : float
+        Lattice spacing [m]; it must divide the width
+    width : float
+        Channel width [m]
+    shear : float
+        dx/dy of the depth contours, tan of their angle to the y axis [-]
+    nLayers : int
+        Boundary particle layers
+    wallTop : float
+        Top of the offshore and side walls [m]
+    endWallTop : float | None
+        Top of the shoreward wall [m]; None for none
+
+    '''
+
+    def __init__(self, bathymetry: Bathymetry, spacing: float, width: float, shear: float, nLayers: int = 3,
+                 wallTop: float = 1.0, endWallTop: float | None = None) -> None:
+
+        self.bathymetry = bathymetry
+        self.spacing = spacing                  # [m]
+        self.width = width                      # [m]
+        self.shear = shear                      # [-]
+        self.nLayers = nLayers
+        self.wallTop = wallTop                  # [m]
+        self.endWallTop = endWallTop            # [m]
+        self.rows = int(round(width / spacing))
+        self.wallX = bathymetry.startX + shear * self.rowY                 # [m], each row's offshore wall
+        self.pistonSpeed = np.zeros(self.rows)                             # [m/s]
+        self._localPiston = np.array([], dtype = np.intp)
+        self._localRow = np.array([], dtype = np.intp)
+        self._start: int | None = None
+
+    @property
+    def rowY(self) -> np.ndarray:
+        '''Spanwise position of each particle row [m].'''
+        return (np.arange(self.rows) + 0.5) * self.spacing
+
+    def rowOf(self, y: np.ndarray) -> np.ndarray:
+        '''The row a spanwise position lies in.'''
+        return np.clip(np.floor(np.asarray(y) / self.spacing).astype(np.intp), 0, self.rows - 1)
+
+    def positions(self) -> np.ndarray:
+
+        '''Boundary particle positions, shape (N, 3): the rows first, then the side walls.'''
+
+        s, layers, bed = self.spacing, self.nLayers, self.bathymetry
+        profile = BedBoundary(bed, s, nLayers = layers, wallTop = self.wallTop,
+                              endWallTop = self.endWallTop)._profilePositions()
+        offshore = profile[:, 0] < bed.startX - 0.25 * s
+        blocks = [np.column_stack([profile[:, 0] + self.shear * y, np.full(len(profile), y), profile[:, 1]])
+                  for y in self.rowY]
+        self._localPiston = np.concatenate([np.flatnonzero(offshore) + r * len(profile) for r in range(self.rows)])
+        self._localRow = np.repeat(np.arange(self.rows), np.count_nonzero(offshore))
+
+        # Side walls: every lattice height from below the bed to the wall top along the profile
+        bedX, _ = bed.sample(s)
+        bedX = np.concatenate([np.arange(bed.startX - layers * s + s / 2.0, bed.startX, s), bedX])
+        heights = np.arange(float(np.min(bed.z)) - layers * s + s / 2.0, self.wallTop, s)
+        xGrid, zGrid = np.meshgrid(bedX, heights, indexing = 'xy')
+        keep = zGrid > bed.elevation(np.clip(xGrid, bed.startX, bed.endX)) - layers * s
+        offsets = (np.arange(layers) + 0.5) * s
+        for y in np.concatenate([-offsets, self.width + offsets]):
+            blocks.append(np.column_stack([xGrid[keep] + self.shear * y, np.full(int(keep.sum()), y), zGrid[keep]]))
+
+        return np.vstack(blocks)
+
+    def attach(self, firstIndex: int) -> None:
+
+        '''Record where this boundary's particles start in the particle system, as `positions` laid them out.'''
+
+        self._start = firstIndex
+
+    def movePiston(self, particles: ParticleSystem, row: int, x: float, velocity: float) -> None:
+
+        '''Move one row's offshore wall to x [m], moving along the channel at `velocity` [m/s].'''
+
+        if self._start is None:
+            raise RuntimeError('The boundary is not attached to a particle system. Call attach first.')
+        members = self._start + self._localPiston[self._localRow == row]
+        particles.positions[members, 0] += x - self.wallX[row]
+        particles.velocities[members] = 0.0
+        particles.velocities[members, 0] = velocity
+        self.wallX[row] = x
+        self.pistonSpeed[row] = velocity
+
+    def enforce(self, particles: ParticleSystem) -> None:
+
+        '''
+
+        Return fluid that has crossed the bed or a wall to the water side, a quarter spacing
+        clear of it, and remove its velocity into the solid; past a piston, the velocity relative
+        to it.
+
+        '''
+
+        fluid = np.nonzero(particles.isFluid)[0]
+        positions, velocities = particles.positions, particles.velocities
+        clearance = 0.25 * self.spacing
+        bed, shear = self.bathymetry, self.shear
+
+        # Bed, with its normal in 3D: (-f', shear f', 1) for z = f(x - shear y)
+        along = positions[fluid, 0] - shear * positions[fluid, 1]
+        under = fluid[positions[fluid, 2] < bed.elevation(along) + clearance]
+        if under.size:
+            along = positions[under, 0] - shear * positions[under, 1]
+            positions[under, 2] = bed.elevation(along) + clearance
+            slope = bed.slope(along)
+            normal = np.column_stack([-slope, shear * slope, np.ones_like(slope)])
+            normal /= np.linalg.norm(normal, axis = 1)[:, None]
+            inward = np.sum(velocities[under] * normal, axis = 1)
+            into = inward < 0.0
+            velocities[under[into]] -= inward[into, None] * normal[into]
+
+        # Side walls
+        low = fluid[positions[fluid, 1] < clearance]
+        positions[low, 1] = clearance
+        velocities[low, 1] = np.maximum(velocities[low, 1], 0.0)
+        high = fluid[positions[fluid, 1] > self.width - clearance]
+        positions[high, 1] = self.width - clearance
+        velocities[high, 1] = np.minimum(velocities[high, 1], 0.0)
+
+        # Each row's offshore wall, and the shoreward end
+        rows = self.rowOf(positions[fluid, 1])
+        behind = positions[fluid, 0] < self.wallX[rows] + clearance
+        members = fluid[behind]
+        positions[members, 0] = self.wallX[rows[behind]] + clearance
+        velocities[members, 0] = np.maximum(velocities[members, 0], self.pistonSpeed[rows[behind]])
+        limit = bed.endX + shear * positions[fluid, 1] - (clearance if self.endWallTop is not None else 0.0)
+        beyond = positions[fluid, 0] > limit
+        members = fluid[beyond]
+        positions[members, 0] = limit[beyond]
+        velocities[members, 0] = np.minimum(velocities[members, 0], 0.0)

@@ -27,7 +27,9 @@ does, compresses no water. An optional floor keeps the fluid density from fallin
 in spray, where the pressure is zero anyway.
 
 The physics is written as functions of arrays, one per equation, and `WcsphSolver` composes them.
-Each function can be called and tested on its own.
+Each function can be called and tested on its own. For large runs the solver can instead use
+`pysurf.sphCompiled` (`backend = 'compiled'`): the same equations compiled with numba, summed per
+particle over a cell-linked neighbor list across threads, with no per-pair arrays held in memory.
 
 Density is integrated from the continuity equation, d rho_i / dt = sum_j m_j v_ij . grad W_ij,
 rather than summed from positions. A summed density reads low at the free surface, where half of
@@ -166,6 +168,13 @@ class SimulationConfig:
     initialSurface : float | Callable | None
         Free-surface elevation the starting density is hydrostatic beneath [m], as a level or a
         function of x; None starts every particle at the reference density
+    periodicWidth : float | None
+        In 3D, the length of a periodic y axis on [0, periodicWidth) [m]: particles leaving one side
+        come back on the other, and pairs across the seam see each other at their nearest image;
+        None for no periodic axis
+    backend : str
+        'numpy', the array formulation of this module, or 'compiled', the same equations compiled
+        with numba and run across threads (`pysurf.sphCompiled`), with the cubic spline kernel only
 
     '''
 
@@ -189,6 +198,8 @@ class SimulationConfig:
     densityFilterInterval: int = 30
     densityFloor: float = 0.0
     initialSurface: object = None
+    periodicWidth: float | None = None
+    backend: str = 'numpy'
 
     @property
     def smoothingLength(self) -> float:
@@ -570,6 +581,22 @@ class WcsphSolver:
         self._pairs = (np.array([], dtype = np.intp), np.array([], dtype = np.intp))
         self._gravity = abs(float(np.asarray(config.gravity)[-1]))     # [m/s^2]
 
+        # Pairs across the seam count one image only: a particle must not reach two images of
+        # another, which needs the period longer than twice the kernel's support
+        if config.periodicWidth is not None and config.periodicWidth <= 2.0 * config.supportRadius:
+            raise ValueError(f'The periodic width {config.periodicWidth} m must exceed twice the kernel support, '
+                             f'{2.0 * config.supportRadius} m.')
+        if config.backend not in ('numpy', 'compiled'):
+            raise ValueError(f"Backend '{config.backend}' is not 'numpy' or 'compiled'.")
+        self._compiled = config.backend == 'compiled'
+        if self._compiled:
+            if config.kernelType != 'cubicSpline':
+                raise ValueError('The compiled backend has the cubic spline kernel only.')
+            from pysurf import sphCompiled
+            self._sph = sphCompiled
+            self._sigma = sphCompiled.cubicSplineNormalization(config.smoothingLength, config.dimensions)
+            self._period = config.periodicWidth or 0.0
+
         if config.speedOfSound is not None:
             self._speedOfSound = float(config.speedOfSound)
         else:
@@ -581,9 +608,17 @@ class WcsphSolver:
         '''Pair the particles at their current positions, with each pair's separation, distance and W.'''
 
         p = self._particles
-        self._pairs = neighborPairs(p.positions, self._config.supportRadius)
+        period = self._config.periodicWidth
+        if self._compiled:
+            self._offsets, self._neighbors = self._sph.neighborList(p.positions, self._config.supportRadius,
+                                                                    self._period)
+            return
+        self._pairs = neighborPairs(p.positions, self._config.supportRadius, period)
         i, j = self._pairs
         self._separation = p.positions[i] - p.positions[j]
+        if period is not None:
+            # The nearest image across the periodic seam
+            self._separation[:, 1] -= period * np.round(self._separation[:, 1] / period)
         self._distance = np.linalg.norm(self._separation, axis = 1)
         self._kernelValues = self._kernel.evaluateBatch(self._distance, self._config.smoothingLength)
         self._boundaryPairs = ~(p.isFluid[i] & p.isFluid[j])
@@ -594,8 +629,12 @@ class WcsphSolver:
         '''Reset the fluid density to its Shepard-filtered value; the boundary keeps its own.'''
 
         p = self._particles
-        filtered = shepardDensity(self._masses, p.densities, *self._pairs, self._kernelValues,
-                                  self._kernel.evaluate(0.0, self._config.smoothingLength))
+        if self._compiled:
+            filtered = self._sph.shepardDensity(p.positions, p.densities, p.masses, self._offsets, self._neighbors,
+                                                self._config.smoothingLength, self._sigma, self._period)
+        else:
+            filtered = shepardDensity(self._masses, p.densities, *self._pairs, self._kernelValues,
+                                      self._kernel.evaluate(0.0, self._config.smoothingLength))
         p.densities[p.isFluid] = filtered[p.isFluid]
 
     def _computeRates(self) -> None:
@@ -603,9 +642,15 @@ class WcsphSolver:
         '''Pressure from the current density, then the acceleration of the fluid; zero on the boundary.'''
 
         p, config = self._particles, self._config
-        i, j = self._pairs
 
         p.pressures = taitEquationOfState(p.densities, config.referenceDensity, self._speedOfSound)
+        if self._compiled:
+            p.accelerations = self._sph.pairAccelerations(
+                p.positions, p.velocities, p.densities, p.pressures, p.masses, p.isFluid, self._offsets,
+                self._neighbors, config.smoothingLength, self._sigma, self._speedOfSound, config.alphaViscosity,
+                config.boundaryViscosityFactor, np.asarray(config.gravity, dtype = float), self._period)
+            return
+        i, j = self._pairs
 
         # Every pair is evaluated, boundary-boundary ones included: they are a few percent of the
         # total, and masking them out copies every pair array, which costs more than it saves
@@ -642,6 +687,20 @@ class WcsphSolver:
         p, config = self._particles, self._config
         fluid = p.isFluid
         p.velocities[fluid] += p.accelerations[fluid] * timeStep
+        if self._compiled:
+            sph, h = self._sph, config.smoothingLength
+            p.densities += sph.continuityRate(p.positions, p.velocities, p.masses, fluid, self._offsets,
+                                              self._neighbors, h, self._sigma, self._period) * timeStep
+            if config.densityFloor > 0.0:
+                p.densities[fluid] = np.maximum(p.densities[fluid], config.densityFloor * config.referenceDensity)
+            transport = p.velocities
+            if config.xsphEpsilon > 0.0:
+                transport = sph.xsphVelocity(p.positions, p.velocities, p.densities, p.masses, fluid, self._offsets,
+                                             self._neighbors, h, self._sigma, config.xsphEpsilon, self._period)
+            p.positions[fluid] += transport[fluid] * timeStep
+            if config.periodicWidth is not None:
+                p.positions[fluid, 1] = np.mod(p.positions[fluid, 1], config.periodicWidth)
+            return
         i, j = self._pairs
         p.densities += continuityRate(self._masses, p.velocities, i, j, self._kernelGradients, p.nParticles,
                                       self._fluidTouching) * timeStep
@@ -655,6 +714,8 @@ class WcsphSolver:
             transport = xsphVelocity(p.velocities, self._masses, p.densities, i[fluidPairs], j[fluidPairs],
                                      self._kernelValues[fluidPairs], config.xsphEpsilon)
         p.positions[fluid] += transport[fluid] * timeStep
+        if config.periodicWidth is not None:
+            p.positions[fluid, 1] = np.mod(p.positions[fluid, 1], config.periodicWidth)
 
     # -- Public Methods -- #
     def initialize(self, particles: ParticleSystem) -> None:

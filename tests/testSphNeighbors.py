@@ -63,3 +63,16 @@ def testNoPairsGiveEmptyIndexArrays(positions):
 
     assert i.size == 0 and j.size == 0
     assert i.dtype == np.intp
+
+def testPeriodicPairsMatchTheNearestImage():
+
+    rng = np.random.default_rng(12)
+    period = 0.7
+    positions = rng.uniform([0.0, 0.0, 0.0], [2.0, period, 1.0], size = (400, 3))
+    i, j = neighborPairs(positions, 0.12, period = period)
+    difference = positions[:, None, :] - positions[None, :, :]
+    difference[..., 1] -= period * np.round(difference[..., 1] / period)
+    a, b = np.nonzero(np.triu(np.linalg.norm(difference, axis = 2) < 0.12, k = 1))
+
+    assert set(zip(i.tolist(), j.tolist())) == set(zip(a.tolist(), b.tolist()))
+    assert np.any(np.abs(positions[i, 1] - positions[j, 1]) > 0.5 * period)

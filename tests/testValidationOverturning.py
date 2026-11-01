@@ -12,9 +12,9 @@ plane slopes with a fully nonlinear potential flow model, the same class of mode
 definition the model here applies directly. For H0/h0 = 0.3 on a 1:35 slope they give Hb/hb = 1.380
 and Hb/h0 = 0.476 (tabulated in Table 8 of Senthilkumar 2016, arXiv:1601.06822), so hb/h0 = 0.345.
 The acceptance criteria are those applied to the SGN and SPH models: Hb/d within 10 percent and
-hb/d within 15 percent. The starting wave differs from Grilli's: theirs is the exact potential flow
-solitary wave (Tanaka 1986), this one the exact SGN wave with the vertical velocity structure of
-potential flow added, which adjusts by about 1 percent in height over the first depths of travel.
+hb/d within 15 percent. The wave starts as Grilli's did, as the exact potential flow solitary wave
+(`startingWave = 'exact'`), and breaks at Hb/d = 0.491 and hb/d = 0.350, 3.2 and 1.4 percent above
+theirs. Started from the exact SGN wave instead, the default, it breaks at 0.504 and 0.359.
 
 Overturn at jet impact: Feddersen, Hanson, Mostert and Fincham (2024), a two-phase direct numerical
 simulation of the soliton of the Surf Ranch experiments of Feddersen et al. (2023): a Green-Naghdi
@@ -75,7 +75,8 @@ def measureBreaking(crestSpacingRatio: float = 0.02) -> dict:
 
     '''Run the Grilli case and return the breaking summary.'''
 
-    wave = OverturningWave(depth = 1.0, waveHeight = 0.3, beachSlope = 1.0 / 35.0, crestSpacingRatio = crestSpacingRatio)
+    wave = OverturningWave(depth = 1.0, waveHeight = 0.3, beachSlope = 1.0 / 35.0, crestSpacingRatio = crestSpacingRatio,
+                           startingWave = 'exact')
     wave.run(progress = False)
 
     return wave.summary()

@@ -165,13 +165,16 @@ class SplashFrame:
     sprayShare: float = 0.0
 
 def waterMeasures(positions: np.ndarray, spacing: float, stillWaterLevel: float, waveHeight: float,
-                  neighbors: int = 4) -> dict:
+                  neighbors: int | None = None, period: float | None = None) -> dict:
 
     '''
 
     The crest and the leading edge of the water, with spray left out. A particle is spray when
     fewer than `neighbors` others lie within one and a half spacings of it: a droplet, or a strand
-    a particle thick, rather than the body of the water or a sheet of it.
+    a particle thick, rather than the body of the water or a sheet of it. The default is 4 in 2D
+    and 10 in 3D, where the same strand drawn across neighboring lattice planes has 8 neighbors and
+    the body of the water 18. The vertical axis is the last; `period` is the length of a periodic
+    y axis in 3D.
 
     Returns:
     --------
@@ -180,13 +183,25 @@ def waterMeasures(positions: np.ndarray, spacing: float, stillWaterLevel: float,
 
     '''
 
-    counts = cKDTree(positions).query_ball_point(positions, 1.5 * spacing, return_length = True) - 1
+    if neighbors is None:
+        neighbors = 4 if positions.shape[1] == 2 else 10
+    if period is None:
+        tree = cKDTree(positions)
+        query = positions
+    else:
+        query = positions - positions.min(axis = 0)
+        query[:, 1] = np.mod(positions[:, 1], period)
+        query[query[:, 1] >= period, 1] = 0.0
+        box = 2.0 * query.max(axis = 0) + 4.0 * spacing + 1.0
+        box[1] = period
+        tree = cKDTree(query, boxsize = box)
+    counts = tree.query_ball_point(query, 1.5 * spacing, return_length = True) - 1
     water = positions[counts >= neighbors]
-    highest = int(np.argmax(water[:, 1]))
-    raised = water[water[:, 1] > stillWaterLevel + 0.1 * waveHeight, 0]
+    highest = int(np.argmax(water[:, -1]))
+    raised = water[water[:, -1] > stillWaterLevel + 0.1 * waveHeight, 0]
 
     return {
-        'crestHeight': float(water[highest, 1] - stillWaterLevel),
+        'crestHeight': float(water[highest, -1] - stillWaterLevel),
         'crestX': float(water[highest, 0]),
         'frontX': float(np.max(raised)) if raised.size else float('nan'),
         'sprayShare': float(np.mean(counts < neighbors)),
@@ -226,6 +241,12 @@ class SplashUp:
     bed : Bathymetry | None
         The bed under the SPH water, the overturning wave's by default; it may run on past the end
         of the potential flow's tank, up a beach, with still water filling it there
+    span : float | None
+        Width of a three-dimensional channel, periodic across its width, that the two-dimensional
+        hand-off is repeated across in every lattice plane [m], rounded to whole spacings; None for
+        a two-dimensional run. Energies stay per unit crest width.
+    backend : str
+        The SPH solver's backend, 'numpy' or 'compiled' (`pysurf.sphSolver.SimulationConfig`)
 
     '''
 
@@ -233,7 +254,7 @@ class SplashUp:
     def __init__(self, wave, particlesPerDepth: int = 64, behindDepths: float = 3.0, aheadDepths: float = 6.0,
                  duration: float | None = None, frameInterval: float | None = None, alphaViscosity: float = 0.02,
                  soundSpeedFactor: float = 10.0, frameIndex: int | None = None, piston: bool = True,
-                 bed = None) -> None:
+                 bed = None, span: float | None = None, backend: str = 'numpy') -> None:
 
         self.wave = wave
         self.particlesPerDepth = particlesPerDepth
@@ -250,6 +271,10 @@ class SplashUp:
         self.frameIndex = frameIndex
         self.usePiston = piston
         self.bed = bed
+        spacing = wave.depth / particlesPerDepth
+        self.planes = max(1, round(span / spacing)) if span is not None else 0
+        self.span = self.planes * spacing if span is not None else None         # [m]
+        self.backend = backend
 
         self.field: FlowField | None = None
         self.bathymetry = None
@@ -325,11 +350,15 @@ class SplashUp:
 
         p, fluid = self.particles, self.particles.isFluid
         positions = p.positions[fluid]
-        measures = waterMeasures(positions, self.spacing, self.bathymetry.stillWaterLevel, self.wave.waveHeight)
-        potentialEnergy = p.potentialEnergy(self.wave.solver.config.gravity) - self._restPotentialEnergy()
+        measures = waterMeasures(positions, self.spacing, self.bathymetry.stillWaterLevel, self.wave.waveHeight,
+                                 period = self.span)
+        # In 3D the energies are divided by the channel width, so both stay per unit crest width
+        width = self.span if self.span is not None else 1.0
+        potentialEnergy = (p.potentialEnergy(self.wave.solver.config.gravity) / width
+                           - self._restPotentialEnergy())
         self.frames.append(SplashFrame(time = self.handoffTime + self.solver.time, positions = positions.copy(),
                                        speeds = np.linalg.norm(p.velocities[fluid], axis = 1),
-                                       kineticEnergy = p.kineticEnergy(), pistonX = self.boundary.wallX,
+                                       kineticEnergy = p.kineticEnergy() / width, pistonX = self.boundary.wallX,
                                        potentialEnergy = potentialEnergy, **measures))
 
     def _restPotentialEnergy(self) -> float:
@@ -409,23 +438,47 @@ class SplashUp:
         wallTop = wave.bathymetry.stillWaterLevel + 2.5 * wave.waveHeight
         self.boundary = BedBoundary(self.bathymetry, s, nLayers = 3, wallTop = wallTop, endWallTop = wallTop)
         boundaryPositions = self.boundary.positions()
-        pressure = np.concatenate([pressure, boundaryPressure(self.field, self.bathymetry, boundaryPositions, s,
-                                                              tankEnd if frontX > tankEnd else None)])
+        bedPressure = boundaryPressure(self.field, self.bathymetry, boundaryPositions, s,
+                                       tankEnd if frontX > tankEnd else None)
+        bottom = float(np.min(self.bathymetry.z)) - 4.0 * s
+        domainMin, domainMax = np.array([backX - 4.0 * s, bottom]), np.array([frontX + 4.0 * s, wallTop])
+        if self.span is not None:
+            # The two-dimensional hand-off in every lattice plane across the period, in the order
+            # the periodic boundary lays out its own planes
+            planes, count = self.planes, len(fluid)
+            across = (np.arange(planes) + 0.5) * s
+            fluid = np.column_stack([np.repeat(fluid[:, 0], planes), np.tile(across, count),
+                                     np.repeat(fluid[:, 1], planes)])
+            velocity = np.column_stack([np.repeat(velocity[:, 0], planes), np.zeros(count * planes),
+                                        np.repeat(velocity[:, 1], planes)])
+            pressure = np.repeat(pressure, planes)
+            self.boundary = BedBoundary(self.bathymetry, s, nLayers = 3, wallTop = wallTop, endWallTop = wallTop,
+                                        width = self.span, periodic = True)
+            boundaryPositions = self.boundary.positions()
+            bedPressure = np.repeat(bedPressure, planes)
+            domainMin = np.array([backX - 4.0 * s, 0.0, bottom])
+            domainMax = np.array([frontX + 4.0 * s, self.span, wallTop])
+        pressure = np.concatenate([pressure, bedPressure])
 
         soundSpeed = handoffSoundSpeed(d, wave.waveHeight, self.soundSpeedFactor)
         self.particles = ParticleSystem.assemble(fluid, boundaryPositions, s, rho, velocity)
+        gravity = np.zeros(len(domainMin))
+        gravity[-1] = -solver.config.gravity
         config = SimulationConfig(
-            domainMin        = np.array([backX - 4.0 * s, float(np.min(self.bathymetry.z)) - 4.0 * s]),
-            domainMax        = np.array([frontX + 4.0 * s, wallTop]),
+            domainMin        = domainMin,
+            domainMax        = domainMax,
             particleSpacing  = s,
             referenceDensity = rho,
-            gravity          = np.array([0.0, -solver.config.gravity]),
+            gravity          = gravity,
             endTime          = self.duration,
             maxTimeStep      = 1.0,
             outputInterval   = self.frameInterval,
+            dimensions       = len(domainMin),
             speedOfSound     = soundSpeed,
             alphaViscosity   = self.alphaViscosity,
             densityFloor     = self.densityFloor,
+            periodicWidth    = self.span,
+            backend          = self.backend,
         )
         self.solver = WcsphSolver(config, boundary = self.boundary)
         self.solver.initialize(self.particles)

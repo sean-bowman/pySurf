@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 
 from pysurf.bathymetry import Bathymetry
-from pysurf.sphBoundaries import BedBoundary, ContainerBoundary
+from pysurf.sphBoundaries import BedBoundary, ContainerBoundary, ShearedBedBoundary
 from pysurf.sphParticles import ParticleSystem, latticePoints
 
 s = 0.02    # [m]
@@ -139,3 +139,60 @@ def testFluidAboveTheBedIsLeftAlone(beach):
 
     assert particles.positions[0] == pytest.approx([2.0, 0.25])
     assert particles.velocities[0] == pytest.approx([0.3, -0.5])
+
+def testAPeriodicBedFillsThePeriodWithNoSideWalls(beach):
+
+    width = 0.1
+    points = BedBoundary(beach, s, nLayers = 2, wallTop = 0.5, width = width, periodic = True).positions()
+    rows = np.unique(np.round(points[:, 1] / s, 6))
+
+    assert points[:, 1].min() == pytest.approx(0.5 * s) and points[:, 1].max() == pytest.approx(width - 0.5 * s)
+    assert len(rows) == round(width / s)
+    assert len(points) == round(width / s) * len(BedBoundary(beach, s, nLayers = 2, wallTop = 0.5).positions())
+
+def testAShearedBedFollowsItsObliqueContours(beach):
+
+    shear, width = 0.5, 0.1
+    boundary = ShearedBedBoundary(beach, s, width, shear, nLayers = 2, wallTop = 0.5, endWallTop = 0.5)
+    points = boundary.positions()
+    inside = (points[:, 1] > 0.0) & (points[:, 1] < width)
+    along = points[inside, 0] - shear * points[inside, 1]
+    bedRows = (along > beach.startX + 0.1) & (along < beach.endX - 0.1)
+
+    assert boundary.rows == 5
+    # Every row's bed layers sit below the sheared bed by the same profile as the 2D bed's
+    assert np.all(points[inside][bedRows, 2] < beach.elevation(along[bedRows]))
+    assert np.any(points[:, 1] < 0.0) and np.any(points[:, 1] > width)
+
+def testShearedEnforcementLiftsFluidAboveTheShearedBedAndHoldsTheSideWalls(beach):
+
+    shear, width = 0.5, 0.1
+    boundary = ShearedBedBoundary(beach, s, width, shear, nLayers = 2, wallTop = 0.5, endWallTop = 0.5)
+    y = 0.05
+    x = 3.0 + shear * y
+    below = beach.elevation(np.array([3.0]))[0] - 0.01
+    fluid = np.array([[x, y, below], [x, -0.01, 0.3], [x, width + 0.01, 0.3]])
+    particles = ParticleSystem.assemble(fluid, np.empty((0, 3)), s, 1000.0,
+                                        np.array([[0.0, 0.0, -1.0], [0.0, -1.0, 0.0], [0.0, 1.0, 0.0]]))
+    boundary.enforce(particles)
+
+    assert particles.positions[0, 2] == pytest.approx(beach.elevation(np.array([3.0]))[0] + 0.25 * s)
+    # The velocity into the bed, along its 3D normal (-f', shear f', 1), is removed
+    normal = np.array([-0.1, 0.5 * 0.1, 1.0])
+    assert np.dot(particles.velocities[0], normal / np.linalg.norm(normal)) == pytest.approx(0.0, abs = 1e-12)
+    assert particles.positions[1, 1] == pytest.approx(0.25 * s) and particles.velocities[1, 1] == 0.0
+    assert particles.positions[2, 1] == pytest.approx(width - 0.25 * s) and particles.velocities[2, 1] == 0.0
+
+def testEachShearedRowHasAPistonOfItsOwn(beach):
+
+    boundary = ShearedBedBoundary(beach, s, 0.1, 0.5, nLayers = 2, wallTop = 0.5)
+    points = boundary.positions()
+    particles = ParticleSystem.assemble(np.empty((0, 3)), points, s, 1000.0)
+    boundary.attach(0)
+    before = particles.positions.copy()
+    boundary.movePiston(particles, 2, boundary.wallX[2] + 0.05, 0.3)
+    moved = np.any(particles.positions != before, axis = 1)
+
+    assert moved.any()
+    assert np.all(np.floor(particles.positions[moved, 1] / s) == 2)
+    assert particles.velocities[moved, 0] == pytest.approx(0.3)

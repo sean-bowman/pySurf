@@ -1218,11 +1218,18 @@ class BemSolver:
 
         return timeStep
 
-    def step(self, timeStep: float | None = None) -> float:
+    def step(self, timeStep: float | None = None, maxTimeStep: float | None = None) -> float:
 
         '''
 
         Advance one fourth-order Runge-Kutta step, regridding at the configured interval.
+
+        Parameters:
+        -----------
+        timeStep : float | None
+            Step to take [s]; the stable step by default
+        maxTimeStep : float | None
+            Longest step to take [s], so a run can land exactly on a time it must record
 
         Returns:
         --------
@@ -1233,6 +1240,8 @@ class BemSolver:
         x0, phi0 = self.surface, self.potential
         k1x, k1p = self._rates(x0, phi0)
         dt = self.stableTimeStep(k1x) if timeStep is None else timeStep
+        if maxTimeStep is not None:
+            dt = min(dt, maxTimeStep)
         k2x, k2p = self._rates(x0 + 0.5 * dt * k1x, phi0 + 0.5 * dt * k1p)
         k3x, k3p = self._rates(x0 + 0.5 * dt * k2x, phi0 + 0.5 * dt * k2p)
         k4x, k4p = self._rates(x0 + dt * k3x, phi0 + dt * k3p)
@@ -1388,6 +1397,12 @@ class FlowField:
 
         return interiorVelocity(self.flow, points)
 
+    def potentialRate(self, points: np.ndarray) -> np.ndarray:
+
+        '''phi_t at points inside the water [m^2/s^2].'''
+
+        return interiorPotential(self.unsteady, points)
+
     def pressure(self, points: np.ndarray, velocity: np.ndarray | None = None) -> np.ndarray:
 
         '''
@@ -1399,7 +1414,7 @@ class FlowField:
 
         if velocity is None:
             velocity = self.velocity(points)
-        rate = interiorPotential(self.unsteady, points)
+        rate = self.potentialRate(points)
 
         return -self.density * (rate + 0.5 * np.sum(velocity**2, axis = 1)
                                 + self.gravity * (points[:, 1] - self.stillWaterLevel))

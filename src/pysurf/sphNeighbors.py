@@ -25,11 +25,17 @@ Sean Bowman [10/11/2026]
 import numpy as np
 from scipy.spatial import cKDTree
 
-def neighborPairs(positions: np.ndarray, radius: float) -> tuple[np.ndarray, np.ndarray]:
+def neighborPairs(positions: np.ndarray, radius: float, period: float | None = None,
+                  periodicAxis: int = 1) -> tuple[np.ndarray, np.ndarray]:
 
     '''
 
-    Every unique pair of points closer than `radius`.
+    Every unique pair of points closer than `radius`, optionally across a periodic axis.
+
+    With a period, distances along `periodicAxis` are taken to the nearest periodic image, so a
+    point near one end pairs with points near the other. The tree's toroidal topology does this;
+    the other axes are given a box more than twice the points' extent plus the radius, so no pair
+    across them ever wraps.
 
     Parameters:
     -----------
@@ -37,6 +43,10 @@ def neighborPairs(positions: np.ndarray, radius: float) -> tuple[np.ndarray, np.
         Point positions, shape (N, dim) [m]
     radius : float
         Search radius [m]
+    period : float | None
+        Length of the periodic axis [m]; None for no periodic axis
+    periodicAxis : int
+        Index of the periodic axis
 
     Returns:
     --------
@@ -48,7 +58,17 @@ def neighborPairs(positions: np.ndarray, radius: float) -> tuple[np.ndarray, np.
         empty = np.array([], dtype = np.intp)
         return empty, empty.copy()
 
-    pairs = cKDTree(positions).query_pairs(radius, output_type = 'ndarray')
+    if period is None:
+        tree = cKDTree(positions)
+    else:
+        data = positions - positions.min(axis = 0)
+        box = 2.0 * data.max(axis = 0) + 4.0 * radius + 1.0
+        wrapped = np.mod(positions[:, periodicAxis], period)
+        wrapped[wrapped >= period] = 0.0
+        data[:, periodicAxis] = wrapped
+        box[periodicAxis] = period
+        tree = cKDTree(data, boxsize = box)
+    pairs = tree.query_pairs(radius, output_type = 'ndarray')
     if pairs.size == 0:
         empty = np.array([], dtype = np.intp)
         return empty, empty.copy()

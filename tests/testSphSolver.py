@@ -294,3 +294,36 @@ def testADensityFloorHoldsADropletWhoseNeighborsFlyApart(floor):
         assert np.min(particles.densities) == pytest.approx(900.0)
     else:
         assert np.min(particles.densities) < 900.0
+
+def testAPeriodicWidthWithinTwoSupportsIsRejected():
+
+    config = SimulationConfig(domainMin = np.zeros(3), domainMax = np.ones(3), particleSpacing = s, dimensions = 3,
+                              gravity = np.zeros(3), speedOfSound = c0, periodicWidth = 4.0 * s)
+
+    with pytest.raises(ValueError):
+        WcsphSolver(config)
+
+def testAnExtrudedFlowInAPeriodicChannelStaysPlanar():
+
+    # A random flow in (x, z), the same in every plane across a periodic y axis, must keep zero
+    # spanwise velocity to rounding and wrap its particles back into the period
+    rng = np.random.default_rng(5)
+    planes, period = 8, 8 * s
+    section = np.array([(x, z) for x in np.arange(s / 2, 0.1, s) for z in np.arange(s / 2, 0.05, s)])
+    sectionVelocity = rng.normal(0.0, 0.5, size = section.shape)
+    across = (np.arange(planes) + 0.5) * s
+    positions = np.column_stack([np.repeat(section[:, 0], planes), np.tile(across, len(section)),
+                                 np.repeat(section[:, 1], planes)])
+    velocity = np.column_stack([np.repeat(sectionVelocity[:, 0], planes), np.zeros(len(positions)),
+                                np.repeat(sectionVelocity[:, 1], planes)])
+    particles = ParticleSystem.assemble(positions, np.empty((0, 3)), s, rho0, velocity)
+    config = SimulationConfig(domainMin = np.array([-1.0, 0.0, -1.0]), domainMax = np.array([1.0, period, 1.0]),
+                              particleSpacing = s, dimensions = 3, gravity = np.zeros(3), speedOfSound = c0,
+                              periodicWidth = period)
+    solver = WcsphSolver(config)
+    solver.initialize(particles)
+    for _ in range(20):
+        solver.step()
+
+    assert np.max(np.abs(particles.velocities[:, 1])) < 1e-12
+    assert np.all((particles.positions[:, 1] >= 0.0) & (particles.positions[:, 1] < period))

@@ -18,6 +18,8 @@ dependencies = [
 
 [project.optional-dependencies]
 viewer = ["dash>=2.14"]
+# The SPH solver's compiled backend, for 3D runs
+compiled = ["numba>=0.60"]
 animations = ["manim>=0.18"]
 test = ["pytest>=7.0"]
 
