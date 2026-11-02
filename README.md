@@ -187,7 +187,7 @@ The reef's depth contours run at an angle $\alpha$ to the incident crest: $z_b(x
 
 The SPH lattice is a set of planes one spacing apart, each the one before it delayed by $\delta = s\tan\alpha/c$, so the jet lands in successive planes $\delta$ apart and the break peels along the crest at $c/\tan\alpha$. Each plane joins the SPH water at its own impact, in the state the 2D `SplashUp` hand-off gives it, so every overturn is the boundary element model's. Ahead of the newest SPH plane, three buffer planes move with the potential flow at their own phase and carry its velocity, $v$ included, and its pressure. They all carry the same water, shifted, so the run follows one template plane through the last three lags before the impact once, and every buffer plane takes its state from it. Each plane's offshore wall is a piston driven as `SplashUp` drives its own, delayed by the plane's lag. The run takes the compiled SPH backend (`sphCompiled`, numba across threads): 111 planes and 470,000 fluid particles at 32 particles per depth ran 1.6 $\sqrt{d/g}$ in 68 minutes on four threads, after 4 minutes restarting the overturn and following the template.
 
-The GIF is the Surf Ranch reef of the overturn above, with its contours at 30° to the crest, from the exact solitary wave of $H/d = 0.6$, at 32 particles per depth, over $1.6\sqrt{d/g}$ from the first plane's impact. Particles are the SPH water, colored by speed from deep blue at rest to white at twice the wave speed; lines are every second plane still in the potential flow, at its own phase. The view is at true scale, low and from shoreward of the reef ahead of the peel, looking back along the crest into the tube as the wave runs and peels toward the camera. The jet lands, splashes up and plunges a second time in every plane, peeling toward $+y$ at $2.16\sqrt{gd}$.
+The GIF is the Surf Ranch reef of the overturn above, with its contours at 30° to the crest, from the exact solitary wave of $H/d = 0.6$, at 32 particles per depth, over $1.6\sqrt{d/g}$ from the first plane's impact. Particles are the SPH water; the planes still in the potential flow, each at its own phase, are drawn as one shaded sheet. Both are colored by speed, from deep blue at rest to white at twice the wave speed, the sheet by the stacked flow's speed with strip theory's spanwise velocity included. The view is at true scale, low and from shoreward of the reef ahead of the peel, looking back along the crest into the tube as the wave runs and peels toward the camera. The water is cut at the end of the first plane's SPH window, down to the reef flat. The jet lands, splashes up and plunges a second time in every plane, peeling toward $+y$ at $2.16\sqrt{gd}$.
 
 ![The free surface at the end of the run, and cross-sections of planes 0.05, 0.4, 0.8 and 1.2 sqrt(d/g) after their impact](examples/peelingWave/peelingWave.png)
 
@@ -204,6 +204,19 @@ The GIF is the Surf Ranch reef of the overturn above, with its contours at 30° 
 Away from the wall at $y = 0$ the peel is steady: every plane's energy follows the same history, and that history is the 2D splash-up's to a percent. With strip theory's spanwise velocity the water drifts toward the broken side, $0.027d$ by $0.8\sqrt{d/g}$ after impact, and the top of the water moves by under $0.01d$ against the run without it, so at 30° the peeling breaker's cross-sections behave as the 2D splash-up delayed plane to plane. The free-slip wall at $y = 0$ stands where older broken water would continue: it feeds energy into the oldest planes with the spanwise velocity (up to +9.5%), and without it the oldest plane loses at most 1.1%; with the spanwise velocity its influence spreads several planes toward the peel over the run.
 
 Not validated: no measurement or 3D simulation of a solitary wave peeling along an oblique reef was found. The checks above test the construction, not the flow. Strip theory's spanwise velocity is the least certain part of the state handed to SPH: on Guyenne and Grilli's ridge it is 70% high. At 30° it changes the plane energies by about 1% and moves the water sideways by under three hundredths of a depth, which brackets how much it matters here; the bracket would widen with the angle, as $\tan^2\alpha$. The stacked state's divergence, $\partial v/\partial y$, is 1.1% rms of the in-plane divergence and up to 34% locally in the jet (`stripResidual`); the SPH water absorbs it as a density disturbance when each plane joins it. The water is single-phase.
+
+##### Triangular reef: peeling both ways
+
+![A plunging breaker on a triangular reef seen head on from the shore: it breaks first at the apex and peels both ways](examples/peelingWave/aFrameWave.gif)
+
+```python
+frame = peel.frames[-1]
+both = np.vstack([frame.positions, frame.positions * [1.0, -1.0, 1.0]])   # the half y > 0 and its mirror image
+```
+
+A triangular reef, $z_b = f(x - |y|\tan\alpha)$, is two oblique reefs joined at an apex on $y = 0$ that points offshore. The wave reaches the apex first and peels both ways at $c/\tan\alpha$. For flow that stays symmetric about $y = 0$, the run above is its half $y > 0$: the free-slip wall at $y = 0$ is the symmetry plane, and the energy it feeds the oldest planes is the two halves' water meeting behind the apex. The GIF draws that run with its mirror image, head on from the shore at true scale, in the same colors and with the same cut as the oblique reef's.
+
+Not validated, as above, with two further limits at the apex. The symmetry plane rules out any breaking that is not symmetric. The reef's contours turn at the apex, so strip theory is least accurate there: it hands the planes beside the wall a spanwise velocity of $\tan\alpha\,(u + \phi_t/c)$ toward the apex, where the three-dimensional flow's would fall to zero. With that velocity the oldest planes gain up to 9.5% of their energy; without it the oldest plane loses at most 1.1%.
 
 #### Reef break (swell, Serre-Green-Naghdi)
 
@@ -362,7 +375,7 @@ repo_root/
 │   ├── surfaceWave/                 Breaking wave animation, free-surface model
 │   ├── overturningWave/             Overturn animation and figures, potential flow
 │   ├── splashUp/                    Splash-up animation, potential flow handed to SPH
-│   ├── peelingWave/                 A breaker peeling along an oblique reef, 3D SPH, and its plane histories
+│   ├── peelingWave/                 A breaker peeling along an oblique reef and both ways on a triangular one, 3D SPH, and its plane histories
 │   ├── reefBreak/                   Swell over a reef animation, free-surface model
 │   └── reefOverturn/                A reef overturn at jet impact
 ├── tests/                           pytest suite; `-m slow` runs the validation cases

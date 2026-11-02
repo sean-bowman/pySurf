@@ -37,9 +37,14 @@ is needed only over those last lags: `build` restarts the two-dimensional run fr
 recorded shortly before its impact and records the surface every half lag to the impact.
 
 Each plane's offshore wall is a piston driven as `SplashUp` drives its own, delayed by the plane's
-lag. The side walls at y = 0 and at the far end are free-slip. In the true flow the water at y = 0
-continues into older broken water; the wall there stops its spanwise flow, and that disturbance
-spreads toward the peel. Far enough from it the flow is steady in a frame moving with the peel, so
+lag. The side walls at y = 0 and at the far end are free-slip. On a reef that stays oblique the
+water at y = 0 continues into older broken water; the wall there stops its spanwise flow, and that
+disturbance spreads toward the peel. On a triangular reef, z_b = f(x - |y| tan(alpha)), the wave
+reaches the apex at y = 0 first and peels both ways; for flow that stays symmetric the wall is the
+symmetry plane, so a run is that reef's half y > 0, and mirroring the frames in y gives the whole.
+Strip theory is least accurate at the apex, where the bed's contours turn: it hands the planes
+beside the wall a spanwise velocity that the three-dimensional flow would bring to zero there.
+Far enough from the wall the flow is steady in a frame moving with the peel, so
 every plane's history as a function of the time since its own impact is the same: `planeHistory`
 gives each plane's energy against that age, and where the histories collapse the wall has not
 reached. A plane's energy is that of the particles it was laid with, followed wherever they move:
