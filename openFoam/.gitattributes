@@ -1,0 +1,3 @@
+# OpenFOAM reads these files, and runs the Allrun scripts, under Linux: keep Unix line endings
+* text=auto eol=lf
+*.png binary

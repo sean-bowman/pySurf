@@ -1,0 +1,97 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     |
+    \\  /    A nd           | www.openfoam.com
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      controlDict;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+application     interFoam;
+
+startFrom       latestTime;
+
+startTime       0;
+
+stopAt          endTime;
+
+// The wave breaks about 7 s in; 11 s carries it through the jet's impact and the splash-up
+endTime         11;
+
+deltaT          0.001;
+
+writeControl    adjustable;
+
+writeInterval   0.5;
+
+purgeWrite      0;
+
+writeFormat     binary;
+
+writePrecision  7;
+
+writeCompression off;
+
+timeFormat      general;
+
+timePrecision   6;
+
+runTimeModifiable yes;
+
+adjustTimeStep  yes;
+
+maxCo           0.3;
+
+maxAlphaCo      0.3;
+
+maxDeltaT       0.01;
+
+functions
+{
+    // Water volume, for the conservation check
+    waterVolume
+    {
+        type            volFieldValue;
+        libs            (fieldFunctionObjects);
+        fields          (alpha.water);
+        operation       volIntegrate;
+        regionType      all;
+        writeControl    timeStep;
+        writeInterval   20;
+        writeFields     false;
+        log             false;
+    }
+
+    // The free surface every 0.05 s from 5 s, as VTK for ParaView: small enough to keep every frame
+    freeSurface
+    {
+        type            surfaces;
+        libs            (sampling);
+        writeControl    adjustableRunTime;
+        writeInterval   0.05;
+        timeStart       5;
+        surfaceFormat   vtk;
+        interpolationScheme cellPoint;
+        fields          (U);
+
+        surfaces
+        {
+            alpha05
+            {
+                type        isoSurface;
+                isoField    alpha.water;
+                isoValue    0.5;
+                interpolate true;
+            }
+        }
+    }
+}
+
+// ************************************************************************* //

@@ -1,0 +1,39 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     |
+    \\  /    A nd           | www.openfoam.com
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      waveProperties;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+// The Surf Ranch soliton of Feddersen et al. (2024): a0/h0 = 0.6, here at h0 = 1 m, as Grimshaw's
+// third-order solitary wave. McCowan's model would suit this height better, but in v2606 its
+// Newton-Raphson solve for the wave's coefficients diverges in this flume from H/h = 0.4 up. The
+// wave enters at x = 20 m with its crest square to the flume; the reef is turned across the span,
+// so the wave breaks first at y = 0 and the break travels across.
+inlet
+{
+    alpha           alpha.water;
+    waveModel       Grimshaw;
+    nPaddle         1;
+    waveHeight      0.6;
+    waveAngle       0.0;
+    activeAbsorption yes;
+}
+
+outlet
+{
+    alpha           alpha.water;
+    waveModel       shallowWaterAbsorption;
+    nPaddle         1;
+}
+
+// ************************************************************************* //

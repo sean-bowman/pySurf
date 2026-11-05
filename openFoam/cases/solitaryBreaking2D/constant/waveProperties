@@ -1,0 +1,37 @@
+/*--------------------------------*- C++ -*----------------------------------*\
+  =========                 |
+  \\      /  F ield         | OpenFOAM: The Open Source CFD Toolbox
+   \\    /   O peration     |
+    \\  /    A nd           | www.openfoam.com
+     \\/     M anipulation  |
+\*---------------------------------------------------------------------------*/
+FoamFile
+{
+    version     2.0;
+    format      ascii;
+    class       dictionary;
+    object      waveProperties;
+}
+// * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * //
+
+// Grilli, Svendsen and Subramanya (1997): a solitary wave of H0/h0 = 0.3, here at h0 = 1 m.
+// Grimshaw's third-order solitary wave is generated at the inlet; the still water depth there is
+// read from the alpha field on the patch.
+inlet
+{
+    alpha           alpha.water;
+    waveModel       Grimshaw;
+    nPaddle         1;
+    waveHeight      0.3;
+    waveAngle       0.0;
+    activeAbsorption yes;
+}
+
+outlet
+{
+    alpha           alpha.water;
+    waveModel       shallowWaterAbsorption;
+    nPaddle         1;
+}
+
+// ************************************************************************* //

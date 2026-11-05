@@ -1,0 +1,25 @@
+#!/bin/sh
+cd "${0%/*}" || exit                                # Run from this directory
+. ${WM_PROJECT_DIR:?}/bin/tools/RunFunctions        # Tutorial run functions
+#------------------------------------------------------------------------------
+
+restore0Dir
+
+runApplication blockMesh
+runApplication checkMesh
+runApplication setFields
+runApplication decomposePar
+
+# The wave forms at the inlet and shoals up the slope; fields every second
+runParallel -s shoaling $(getApplication)
+
+# On through breaking; fields every 0.05 s for the breaking-point analysis
+foamDictionary -entry endTime -set 16 system/controlDict
+foamDictionary -entry writeInterval -set 0.05 system/controlDict
+runParallel -s breaking $(getApplication)
+
+runApplication reconstructPar
+runApplication postProcess -func writeCellCentres -time 0
+touch case.foam
+
+#------------------------------------------------------------------------------

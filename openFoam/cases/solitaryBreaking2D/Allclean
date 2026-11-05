@@ -1,0 +1,13 @@
+#!/bin/sh
+cd "${0%/*}" || exit                                # Run from this directory
+. ${WM_PROJECT_DIR:?}/bin/tools/CleanFunctions      # Tutorial clean functions
+#------------------------------------------------------------------------------
+
+cleanCase0
+rm -f case.foam
+
+# Allrun moves these on for the breaking stage; put them back
+foamDictionary -entry endTime -set 9 system/controlDict > /dev/null
+foamDictionary -entry writeInterval -set 1 system/controlDict > /dev/null
+
+#------------------------------------------------------------------------------
