@@ -61,12 +61,16 @@ The same case here, with the window's offshore wall standing still eight depths 
 and the beach running eight depths past the shoreline, at 48 particles per depth:
 
     quantity                                        SPH         Mostert and Deike     error
-    share of energy lost in active breaking         0.277       0.31                  -11 %
-    (epsilon / epsilon0) (db / d0)                   0.00202     0.00217 (fit)         -7 %
-    active breaking time, t sqrt(g / d)             8.85        8.35                  +6 %
+    share of energy lost in active breaking         0.282       0.31                  -9 %
+    (epsilon / epsilon0) (db / d0)                   0.00206     0.00217 (fit)         -5 %
+    active breaking time, t sqrt(g / d)             8.84        8.35                  +6 %
 
-The criteria, set before the comparison was run, allowed 30 percent. At 64 particles per depth the
-share lost is 0.279 and the scaled rate 0.00200, both within 1 percent of the values at 48. The SPH
+The criteria, set before the comparison was run, allowed 30 percent. The breaking flow amplifies
+rounding: the same run on the numpy, compiled and GPU backends, and on the GPU from starts jittered
+by 1e-9 of a spacing, loses shares of 0.280 to 0.290 (one standard deviation 1.3 percent) at scaled
+rates of 0.00206 to 0.00216 (2.1 percent), every one within the criteria. At 64 particles per depth
+the share lost is 0.279 and the scaled rate 0.00200, 1 and 3 percent below the values at 48, within
+twice that spread, so resolution is not the larger error. The SPH
 model's dissipation is its artificial viscosity, not resolved turbulence, so the agreement holds
 for this breaker and is not a model of turbulence.
 
@@ -246,7 +250,7 @@ class SplashUp:
         hand-off is repeated across in every lattice plane [m], rounded to whole spacings; None for
         a two-dimensional run. Energies stay per unit crest width.
     backend : str
-        The SPH solver's backend, 'numpy' or 'compiled' (`pysurf.sphSolver.SimulationConfig`)
+        The SPH solver's backend, 'numpy', 'compiled' or 'gpu' (`pysurf.sphSolver.SimulationConfig`)
 
     '''
 

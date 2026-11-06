@@ -48,7 +48,7 @@ from pysurf.waveBreaking import freeSurfaceProfile, profileCrest
 from pysurf.waveMakers import solitaryWaveFluid
 
 def measureCelerity(particlesPerDepth: int, heightRatio: float = 0.3, channelDepths: float = 32.0,
-                    fitStart: float = 0.5, fitEnd: float = 3.5) -> dict:
+                    fitStart: float = 0.5, fitEnd: float = 3.5, backend: str = 'numpy') -> dict:
 
     '''
 
@@ -86,6 +86,7 @@ def measureCelerity(particlesPerDepth: int, heightRatio: float = 0.3, channelDep
         speedOfSound     = 10.0 * reference,
         alphaViscosity   = 0.02,
         initialSurface   = lambda x: depth + waveTheory.solitaryWaveProfile(x, height, depth, crestX),
+        backend          = backend,
     )
     solver = WcsphSolver(config, boundary = boundary)
     solver.initialize(particles)

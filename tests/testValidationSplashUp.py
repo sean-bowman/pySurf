@@ -22,8 +22,9 @@ particles per depth in a window from eight depths behind the crest, behind a wal
 so the window's energy changes only by dissipation, up a dry beach eight depths past the shoreline.
 The criteria, set before the comparison was run, allow 30 percent: their data collapse onto the
 fit within about 15 percent, and the SPH model's dissipation comes from its artificial viscosity,
-not from resolved turbulence. The result: the scaled rate is 7 percent below the fit and the share
-lost 11 percent below theirs; at 64 particles per depth both move by under 1 percent.
+not from resolved turbulence. The result: the scaled rate is 5 percent below the fit and the share
+lost 9 percent below theirs. Rounding-level changes to the run move both by one to two percent
+(`pysurf.SplashUp`); at 64 particles per depth they move by 1 and 3 percent.
 
 Run with `pytest -m slow`; the case takes about half an hour.
 
@@ -43,7 +44,7 @@ from pysurf.SplashUp import SplashUp
 mostertShareLost = 0.31         # [-] (0.96 - 0.66) / 0.96, figure 8b, H0/h0 = 0.3 on 3 degrees
 
 @functools.lru_cache(maxsize = None)
-def mostertBreaking(particlesPerDepth: int = 48) -> dict:
+def mostertBreaking(particlesPerDepth: int = 48, backend: str = 'numpy') -> dict:
 
     '''Run Mostert and Deike's plunging case through active breaking and return its dissipation.'''
 
@@ -53,7 +54,8 @@ def mostertBreaking(particlesPerDepth: int = 48) -> dict:
     beach = Bathymetry.planeBeach(depth = 1.0, toeX = wave.toeX, slope = slope, endX = wave.shorelineX + 8.0)
     scale = math.sqrt(1.0 / 9.81)
     splash = SplashUp(wave, particlesPerDepth = particlesPerDepth, behindDepths = 8.0, aheadDepths = 50.0,
-                      piston = False, bed = beach, duration = 11.0 * scale, frameInterval = 0.1 * scale)
+                      piston = False, bed = beach, duration = 11.0 * scale, frameInterval = 0.1 * scale,
+                      backend = backend)
     splash.run(progress = False)
 
     return splash.breakingDissipation()

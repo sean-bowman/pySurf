@@ -64,10 +64,10 @@ def surfRanchExact() -> OverturningWave:
     return wave
 
 @functools.lru_cache(maxsize = None)
-def peelingRun(spanwiseScale: float) -> PeelingWave:
+def peelingRun(spanwiseScale: float, backend: str = 'compiled') -> PeelingWave:
 
     peel = PeelingWave(surfRanchExact(), obliqueAngle = angle, particlesPerDepth = particlesPerDepth,
-                       spanwiseScale = spanwiseScale)
+                       spanwiseScale = spanwiseScale, backend = backend)
     peel.run(progress = False)
 
     return peel

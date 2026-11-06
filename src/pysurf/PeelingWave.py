@@ -190,7 +190,7 @@ class PeelingWave:
     soundSpeedFactor : float
         Speed of sound over the solitary wave speed sqrt(g (d + H))
     backend : str
-        The SPH solver's backend, 'compiled' or 'numpy'
+        The SPH solver's backend, 'compiled', 'gpu' or 'numpy'
 
     '''
 

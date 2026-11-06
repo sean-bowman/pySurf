@@ -43,7 +43,8 @@ def dampedSloshing(t, amplitude, decayRate, omega, phase, mean, drift, driftRate
 
     return amplitude * np.exp(-decayRate * t) * np.cos(omega * t + phase) + mean + drift * np.exp(-driftRate * t)
 
-def measureSloshingPeriod(particleSpacing: float = 0.005, tiltDeg: float = 5.71, periods: float = 4.0) -> dict:
+def measureSloshingPeriod(particleSpacing: float = 0.005, tiltDeg: float = 5.71, periods: float = 4.0,
+                          backend: str = 'numpy') -> dict:
 
     '''
 
@@ -59,6 +60,7 @@ def measureSloshingPeriod(particleSpacing: float = 0.005, tiltDeg: float = 5.71,
                               particleSpacing = particleSpacing)
     config, particles, boundary = createSloshingTank(tank)
     config.maxTimeStep = 1e-3
+    config.backend = backend
     depth = tank.fillRatio * tank.tankHeight
     reference = 2.0 * math.pi / waveTheory.sloshingFrequency(tank.tankWidth, depth)
 

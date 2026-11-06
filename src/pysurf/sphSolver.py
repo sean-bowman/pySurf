@@ -30,6 +30,9 @@ The physics is written as functions of arrays, one per equation, and `WcsphSolve
 Each function can be called and tested on its own. For large runs the solver can instead use
 `pysurf.sphCompiled` (`backend = 'compiled'`): the same equations compiled with numba, summed per
 particle over a cell-linked neighbor list across threads, with no per-pair arrays held in memory.
+For millions of particles it can use `pysurf.sphGpu` (`backend = 'gpu'`): the same sums on a GPU
+through NVIDIA Warp, in float32 with separations from float64 positions, while the host keeps the
+state in float64 and integrates it.
 
 Density is integrated from the continuity equation, d rho_i / dt = sum_j m_j v_ij . grad W_ij,
 rather than summed from positions. A summed density reads low at the free surface, where half of
@@ -173,8 +176,10 @@ class SimulationConfig:
         come back on the other, and pairs across the seam see each other at their nearest image;
         None for no periodic axis
     backend : str
-        'numpy', the array formulation of this module, or 'compiled', the same equations compiled
-        with numba and run across threads (`pysurf.sphCompiled`), with the cubic spline kernel only
+        'numpy', the array formulation of this module; 'compiled', the same equations compiled
+        with numba and run across threads (`pysurf.sphCompiled`); or 'gpu', the same sums on Warp's
+        preferred device, a CUDA GPU where present (`pysurf.sphGpu`). The last two have the cubic
+        spline kernel only
 
     '''
 
@@ -586,16 +591,21 @@ class WcsphSolver:
         if config.periodicWidth is not None and config.periodicWidth <= 2.0 * config.supportRadius:
             raise ValueError(f'The periodic width {config.periodicWidth} m must exceed twice the kernel support, '
                              f'{2.0 * config.supportRadius} m.')
-        if config.backend not in ('numpy', 'compiled'):
-            raise ValueError(f"Backend '{config.backend}' is not 'numpy' or 'compiled'.")
+        if config.backend not in ('numpy', 'compiled', 'gpu'):
+            raise ValueError(f"Backend '{config.backend}' is not 'numpy', 'compiled' or 'gpu'.")
+        if config.backend != 'numpy' and config.kernelType != 'cubicSpline':
+            raise ValueError(f'The {config.backend} backend has the cubic spline kernel only.')
         self._compiled = config.backend == 'compiled'
+        self._gpu = None
         if self._compiled:
-            if config.kernelType != 'cubicSpline':
-                raise ValueError('The compiled backend has the cubic spline kernel only.')
             from pysurf import sphCompiled
             self._sph = sphCompiled
             self._sigma = sphCompiled.cubicSplineNormalization(config.smoothingLength, config.dimensions)
             self._period = config.periodicWidth or 0.0
+        elif config.backend == 'gpu':
+            from pysurf import sphGpu
+            self._gpu = sphGpu.PairSums(config.dimensions, config.smoothingLength, config.domainMin, config.domainMax,
+                                        config.periodicWidth or 0.0)
 
         if config.speedOfSound is not None:
             self._speedOfSound = float(config.speedOfSound)
@@ -609,6 +619,9 @@ class WcsphSolver:
 
         p = self._particles
         period = self._config.periodicWidth
+        if self._gpu is not None:
+            self._gpu.update(p.positions, p.masses, p.isFluid)
+            return
         if self._compiled:
             self._offsets, self._neighbors = self._sph.neighborList(p.positions, self._config.supportRadius,
                                                                     self._period)
@@ -629,7 +642,9 @@ class WcsphSolver:
         '''Reset the fluid density to its Shepard-filtered value; the boundary keeps its own.'''
 
         p = self._particles
-        if self._compiled:
+        if self._gpu is not None:
+            filtered = self._gpu.shepardDensity(p.densities)
+        elif self._compiled:
             filtered = self._sph.shepardDensity(p.positions, p.densities, p.masses, self._offsets, self._neighbors,
                                                 self._config.smoothingLength, self._sigma, self._period)
         else:
@@ -644,6 +659,11 @@ class WcsphSolver:
         p, config = self._particles, self._config
 
         p.pressures = taitEquationOfState(p.densities, config.referenceDensity, self._speedOfSound)
+        if self._gpu is not None:
+            p.accelerations = self._gpu.pairAccelerations(p.velocities, p.densities, p.pressures, self._speedOfSound,
+                                                          config.alphaViscosity, config.boundaryViscosityFactor,
+                                                          np.asarray(config.gravity, dtype = float))
+            return
         if self._compiled:
             p.accelerations = self._sph.pairAccelerations(
                 p.positions, p.velocities, p.densities, p.pressures, p.masses, p.isFluid, self._offsets,
@@ -687,16 +707,23 @@ class WcsphSolver:
         p, config = self._particles, self._config
         fluid = p.isFluid
         p.velocities[fluid] += p.accelerations[fluid] * timeStep
-        if self._compiled:
-            sph, h = self._sph, config.smoothingLength
-            p.densities += sph.continuityRate(p.positions, p.velocities, p.masses, fluid, self._offsets,
-                                              self._neighbors, h, self._sigma, self._period) * timeStep
+        if self._compiled or self._gpu is not None:
+            gpu, h = self._gpu, config.smoothingLength
+            if gpu is not None:
+                rate = gpu.continuityRate(p.velocities)
+            else:
+                rate = self._sph.continuityRate(p.positions, p.velocities, p.masses, fluid, self._offsets,
+                                                self._neighbors, h, self._sigma, self._period)
+            p.densities += rate * timeStep
             if config.densityFloor > 0.0:
                 p.densities[fluid] = np.maximum(p.densities[fluid], config.densityFloor * config.referenceDensity)
             transport = p.velocities
-            if config.xsphEpsilon > 0.0:
-                transport = sph.xsphVelocity(p.positions, p.velocities, p.densities, p.masses, fluid, self._offsets,
-                                             self._neighbors, h, self._sigma, config.xsphEpsilon, self._period)
+            if config.xsphEpsilon > 0.0 and gpu is not None:
+                transport = gpu.xsphVelocity(p.velocities, p.densities, config.xsphEpsilon)
+            elif config.xsphEpsilon > 0.0:
+                transport = self._sph.xsphVelocity(p.positions, p.velocities, p.densities, p.masses, fluid,
+                                                   self._offsets, self._neighbors, h, self._sigma, config.xsphEpsilon,
+                                                   self._period)
             p.positions[fluid] += transport[fluid] * timeStep
             if config.periodicWidth is not None:
                 p.positions[fluid, 1] = np.mod(p.positions[fluid, 1], config.periodicWidth)
@@ -778,6 +805,56 @@ class WcsphSolver:
 
         self._time += self._dt
         self._step += 1
+
+        return self.currentState
+
+    def advance(self, untilTime: float, maxSteps: int | None = None) -> SimulationState:
+
+        '''
+
+        Step until the simulated time reaches `untilTime`, or `maxSteps` steps.
+
+        On the GPU backend, with a boundary the device can enforce (`sphGpu.PairSums.canEnforce`),
+        every step runs on the device: the state goes up once, the steps run there, and the state
+        comes back once, so the particle arrays hold the state at `untilTime` and nothing between.
+        Anything that changes the particles between steps (a moving wall, particles added) needs
+        `step`; a piston holds its position and speed through the call. Otherwise this is `step` in
+        a loop.
+
+        Parameters:
+        -----------
+        untilTime : float
+            Simulated time to stop at or just past [s]
+        maxSteps : int | None
+            Most steps to take; None for no limit
+
+        Returns:
+        --------
+        SimulationState : Diagnostics at the end
+
+        '''
+
+        p, config, gpu = self._particles, self._config, self._gpu
+        lastStep = self._step + maxSteps if maxSteps is not None else None
+        if gpu is None or not gpu.canEnforce(self._boundary):
+            while self._time < untilTime and (lastStep is None or self._step < lastStep):
+                self.step()
+            return self.currentState
+
+        gpu.setPhysics(config.referenceDensity, self._speedOfSound, config.alphaViscosity,
+                       config.boundaryViscosityFactor, np.asarray(config.gravity, dtype = float), config.xsphEpsilon,
+                       config.densityFloor * config.referenceDensity)
+        gpu.push(p)
+        gpu.setBoundary(self._boundary, p)
+        interval = config.densityFilterInterval
+        while self._time < untilTime and (lastStep is None or self._step < lastStep):
+            maxSpeed, maxAcceleration = gpu.residentRates(bool(interval) and self._step > 0 and self._step % interval == 0)
+            self._dt = cflTimeStep(config.smoothingLength, self._speedOfSound, maxSpeed, maxAcceleration,
+                                   config.cflNumber, config.maxTimeStep)
+            gpu.residentIntegrate(self._dt)
+            self._time += self._dt
+            self._step += 1
+        gpu.pull(p)
 
         return self.currentState
 

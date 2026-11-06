@@ -20,6 +20,8 @@ dependencies = [
 viewer = ["dash>=2.14"]
 # The SPH solver's compiled backend, for 3D runs
 compiled = ["numba>=0.60"]
+# The SPH solver's GPU backend (NVIDIA Warp); 1.20 drops Python 3.10
+gpu = ["warp-lang>=1.19,<1.20"]
 animations = ["manim>=0.18"]
 test = ["pytest>=7.0"]
 
