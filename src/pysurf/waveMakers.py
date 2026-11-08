@@ -290,3 +290,74 @@ def solitaryWaveFluid(bathymetry: Bathymetry, height: float, crestX: float, spac
                                            bathymetry.elevation(positions[:, 0]))
 
     return positions, velocities
+
+def exactSolitaryWaveFluid(bathymetry: Bathymetry, height: float, crestX: float,
+                           spacing: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+
+    '''
+
+    Fluid particles under the exact potential flow solitary wave over a bed, with their velocities
+    and pressures (`waveTheory.exactSolitaryFlow`).
+
+    Lattice points are kept from half a spacing above the bed up to the wave's free surface, as in
+    `solitaryWaveFluid`. The velocity is the fully nonlinear wave's, from its conformal map, and the
+    pressure is unsteady Bernoulli's for a wave of permanent form, so the water starts in the state
+    the wave carries rather than settling into it from a hydrostatic one. The flow is that of a flat
+    bed of the depth at the crest; the crest should sit over the flat part with the wave clear of
+    any slope.
+
+    Parameters:
+    -----------
+    bathymetry : Bathymetry
+        The bed, with its still water level
+    height : float
+        Wave height above still water H [m]
+    crestX : float
+        Crest position [m]
+    spacing : float
+        Lattice spacing [m]
+
+    Returns:
+    --------
+    tuple : positions and velocities, each shaped (N, 2) [m, m/s], and pressures over density,
+        shape (N,) [m^2/s^2]
+
+    '''
+
+    depth = float(bathymetry.depth(crestX))
+    level = bathymetry.stillWaterLevel
+
+    def inside(points: np.ndarray) -> np.ndarray:
+        bed = bathymetry.elevation(points[:, 0])
+        _, _, surface = waveTheory.exactSolitaryFlow(points, height, depth, crestX, level)
+        # The tolerance keeps the lattice row exactly half a spacing above a flat bed
+        return (points[:, 1] >= bed + (0.5 - 1e-9) * spacing) & (points[:, 1] < level + surface)
+
+    lower = [bathymetry.startX, float(np.min(bathymetry.z))]
+    upper = [bathymetry.endX, level + height + spacing]
+    positions = fillRegion(inside, lower, upper, spacing)
+    velocities, pressures, _ = waveTheory.exactSolitaryFlow(positions, height, depth, crestX, level)
+
+    return positions, velocities, np.maximum(pressures, 0.0)
+
+def exactSolitaryBoundaryPressure(bathymetry: Bathymetry, positions: np.ndarray, height: float, crestX: float,
+                                  spacing: float, gravity: float = 9.80665) -> np.ndarray:
+
+    '''
+
+    The pressure over density each boundary particle starts with under the exact solitary wave
+    [m^2/s^2], as `sphHandoff.boundaryPressure` sets it after a hand-off: that of the water at the
+    nearest point half a spacing inside it (above the bed, or in from a wall), plus the hydrostatic
+    increment down to the particle; zero where that point is above the surface.
+
+    '''
+
+    depth = float(bathymetry.depth(crestX))
+    level = bathymetry.stillWaterLevel
+    reference = np.column_stack([np.clip(positions[:, 0], bathymetry.startX + 0.5 * spacing,
+                                         bathymetry.endX - 0.5 * spacing), positions[:, 1]])
+    reference[:, 1] = np.maximum(reference[:, 1], bathymetry.elevation(reference[:, 0]) + 0.5 * spacing)
+    _, pressure, surface = waveTheory.exactSolitaryFlow(reference, height, depth, crestX, level, gravity)
+    wet = reference[:, 1] < level + surface
+
+    return np.where(wet, np.maximum(pressure, 0.0) + gravity * (reference[:, 1] - positions[:, 1]), 0.0)

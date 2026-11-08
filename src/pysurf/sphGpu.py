@@ -4,12 +4,14 @@
 '''
 
 The SPH sums and time step of `pysurf.sphSolver` on a GPU, written in NVIDIA Warp, for runs of
-millions of particles: the same four sums as `pysurf.sphCompiled`, term for term, with the cubic
-spline kernel.
+millions of particles: the sums of the array formulation, term for term, with the cubic spline or
+the Wendland C2 kernel.
 
     PairSums            device copies of the particle state, a hash grid over the particles, the
-                        sums (pair accelerations, the continuity rate, the XSPH transport velocity
-                        and the Shepard-filtered density), and the device-resident time step
+                        sums (pair accelerations, the continuity rate with its optional diffusive
+                        term, the XSPH transport velocity, the Shepard-filtered density, the
+                        extrapolated wall pressure and the particle shift), and the
+                        device-resident time step
 
 The solver uses the device in one of two ways:
 
@@ -47,13 +49,21 @@ A periodic axis is y in 3D, on [0, period): a particle within a support of the s
 second time from its image across it. The period must exceed twice the support, as the solver
 requires, so no neighbor is reached from both.
 
+Each particle carries its own smoothing length, none longer than the one the sums are made with,
+which sizes the grid's cells: a particle searches out to its own h plus the longest, and each pair
+takes the mean of its two lengths, h_ij = (h_i + h_j) / 2, with the kernel's normalization at h_ij
+(`pysurf.sphRefinement`). With one length throughout the sums are the uniform ones. Particle
+shifting takes one length throughout.
+
 ----------------------------------------------------------------------
                             Validation status
 ----------------------------------------------------------------------
 
 Nothing here is a new model. tests/testSphGpu.py checks every sum against its array counterpart in
 `pysurf.sphSolver` on random particle clouds in 2D and 3D, with and without a periodic axis, to
-float32 rounding, on Warp's CPU device and on CUDA where present; the bed enforcement against
+float32 rounding, on Warp's CPU device and on CUDA where present, the velocity gradients and the
+limited artificial viscosity among them, and tests/testSphRefinement.py
+the sums the deltaSph scheme uses on clouds of mixed smoothing lengths; the bed enforcement against
 `BedBoundary.enforce` to 1e-12 in 2D and 3D; a solver run on this backend against the compiled
 backend; the device-resident steps against the host steps in a tank and over a bed; and a still
 tank at rest. tests/testValidationGpuBackend.py repeats the CPU backends' validation cases on it.
@@ -73,19 +83,28 @@ import warp as wp
 
 # Local imports
 from pysurf.sphBoundaries import BedBoundary, ContainerBoundary
+from pysurf.sphSolver import (antiClumpingPower, antiClumpingWeight, correctionFloor, freeSurfaceDivergence, freeSurfaceLopsidedness,
+                              limiterCloseDistance, limiterFoldWidth, localShiftingCoefficient, surfaceGradient)
 
 wp.config.quiet = True
 
 viscositySoftening = wp.constant(0.01)          # [-] as in sphSolver: mu_ij's denominator r^2 + 0.01 h^2
+closeDistance = wp.constant(limiterCloseDistance)   # [-] of h_ij, where the limited viscosity's reconstruction fades
+foldWidth = wp.constant(limiterFoldWidth)           # [-] of h_ij, the fade's width
 candidateMargin = wp.constant(1.0001)           # [-] on r^2: float32 distances near 30 m are good to 1e-4 of a support
 taitExponent = 7.0                              # as in sphSolver
 maxGridCells = 2**25                            # cap on the hash grid's cells, 256 MB of cell ranges
 
-# The device arrays of a particle system, about 133 bytes a particle: the float64 state, its float32
+# The device arrays of a particle system, about 141 bytes a particle: the float64 state, its float32
 # copies for the pair sums, and their results
 layout = {'positions': wp.vec3d, 'velocities64': wp.vec3d, 'densities64': wp.float64, 'points': wp.vec3,
-          'lows': wp.vec3, 'velocities': wp.vec3, 'densities': float, 'pressures': float, 'masses': float,
-          'fluid': wp.uint8, 'accelerations': wp.vec3, 'vector': wp.vec3, 'scalar': float}
+          'lows': wp.vec3, 'velocities': wp.vec3, 'densities': float, 'deviations': float, 'pressures': float,
+          'masses': float, 'lengths': float, 'fluid': wp.uint8, 'accelerations': wp.vec3, 'vector': wp.vec3,
+          'scalar': float}
+# The shifting fields, about 68 bytes a particle more, made only for a run that shifts
+shiftingLayout = {'gradients': wp.vec3, 'normals': wp.vec3, 'divergence': float, 'densityGradients': wp.vec3,
+                  'shifts': wp.vec3, 'densityChanges': float, 'velocityChanges': wp.vec3}
+diffusionModes = {'none': 0, 'molteni': 1, 'hydrostatic': 2}
 
 #----------------------------------------------------------------------#
 # -- Device Functions -- #
@@ -116,6 +135,47 @@ def cubicSlope(r: float, h: float, sigma: float) -> float:
         rest = 2.0 - q
         return sigma * (-0.75 * rest * rest) / h
     return 0.0
+
+@wp.func
+def wendlandValue(r: float, h: float, sigma: float) -> float:
+
+    '''The Wendland C2 W(r) = sigma (1 - q/2)^4 (2q + 1), q = r / h < 2.'''
+
+    q = r / h
+    if q < 2.0:
+        rest = 1.0 - 0.5 * q
+        square = rest * rest
+        return sigma * square * square * (2.0 * q + 1.0)
+    return 0.0
+
+@wp.func
+def wendlandSlope(r: float, h: float, sigma: float) -> float:
+
+    '''The Wendland C2 dW/dr = -5 sigma q (1 - q/2)^3 / h.'''
+
+    q = r / h
+    if q < 2.0:
+        rest = 1.0 - 0.5 * q
+        return -5.0 * sigma * q * rest * rest * rest / h
+    return 0.0
+
+@wp.func
+def kernelValue(r: float, h: float, sigma: float, kind: int) -> float:
+
+    '''W(r) of the kernel `kind` names: 0 the cubic spline, 1 the Wendland C2.'''
+
+    if kind == 1:
+        return wendlandValue(r, h, sigma)
+    return cubicValue(r, h, sigma)
+
+@wp.func
+def kernelSlope(r: float, h: float, sigma: float, kind: int) -> float:
+
+    '''dW/dr of the kernel `kind` names: 0 the cubic spline, 1 the Wendland C2.'''
+
+    if kind == 1:
+        return wendlandSlope(r, h, sigma)
+    return cubicSlope(r, h, sigma)
 
 @wp.func
 def imageCount(point: wp.vec3, period: float, support: float) -> int:
@@ -169,37 +229,57 @@ def double(value: wp.vec3) -> wp.vec3d:
 
     return wp.vec3d(wp.float64(value[0]), wp.float64(value[1]), wp.float64(value[2]))
 
+@wp.func
+def normalization(unit: float, h: float, dims: int) -> float:
+
+    '''The kernel's sigma at smoothing length h: its sigma at h = 1 over h^dims.'''
+
+    if dims == 2:
+        return unit / (h * h)
+    return unit / (h * h * h)
+
 #----------------------------------------------------------------------#
 # -- Pair Sums -- #
 #----------------------------------------------------------------------#
 
 @wp.kernel
 def accelerationKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
-                       precise: int, period: float, velocities: wp.array(dtype = wp.vec3),
+                       precise: int, period: float, kind: int, velocities: wp.array(dtype = wp.vec3),
                        densities: wp.array(dtype = float), pressures: wp.array(dtype = float),
-                       masses: wp.array(dtype = float), fluid: wp.array(dtype = wp.uint8), h: float, sigma: float,
+                       masses: wp.array(dtype = float), fluid: wp.array(dtype = wp.uint8),
+                       lengths: wp.array(dtype = float), maxLength: float, sigmaUnit: float, dims: int,
                        soundSpeed: float, alpha: float, boundaryFactor: float, gravity: wp.vec3,
-                       result: wp.array(dtype = wp.vec3)):
+                       gradients: wp.array(dtype = wp.mat33), limited: int, result: wp.array(dtype = wp.vec3)):
 
-    '''a_i = -sum_j m_j (p_i / rho_i^2 + p_j / rho_j^2 + Pi_ij) grad W_ij + g on the fluid, zero on the boundary.'''
+    '''
+
+    a_i = -sum_j m_j (p_i / rho_i^2 + p_j / rho_j^2 + Pi_ij) grad W_ij + g on the fluid, zero on the
+    boundary, each pair at h_ij = (h_i + h_j) / 2. With `limited`, a fluid pair's Pi_ij takes its
+    velocity difference less its linear part from the velocity `gradients`
+    (`sphSolver.limitedVelocityDifference`) and acts where both differences approach.
+
+    '''
 
     i = wp.hash_grid_point_id(grid, wp.tid())
     if fluid[i] == wp.uint8(0):
         result[i] = wp.vec3(0.0, 0.0, 0.0)
         return
-    support = 2.0 * h
-    limit = candidateMargin * support * support
-    softening = viscositySoftening * h * h
+    lengthI = lengths[i]
+    reach = lengthI + maxLength
+    limit = candidateMargin * reach * reach
     pointI = points[i]
     lowI = lows[i]
     velocityI = velocities[i]
     densityI = densities[i]
     own = pressures[i] / (densityI * densityI)
+    gradientI = wp.mat33(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    if limited != 0:
+        gradientI = gradients[i]
     total = wp.vec3(0.0, 0.0, 0.0)
-    for image in range(imageCount(pointI, period, support)):
+    for image in range(imageCount(pointI, period, reach)):
         offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
         origin = pointI + offset
-        query = wp.hash_grid_query(grid, origin, support)
+        query = wp.hash_grid_query(grid, origin, reach)
         j = int(0)
         while wp.hash_grid_query_next(query, j):
             pointJ = points[j]
@@ -208,35 +288,389 @@ def accelerationKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows:
                 continue
             d = separation(coarse, pointI, pointJ, lowI, lows[j], offset, precise)
             r = wp.length(d)
-            if r >= support or r < 1.0e-12:
+            h = 0.5 * (lengthI + lengths[j])
+            if r >= 2.0 * h or r < 1.0e-12:
                 continue
             densityJ = densities[j]
             approach = wp.dot(velocityI - velocities[j], d)
             viscosity = float(0.0)
+            if approach < 0.0 and limited != 0 and fluid[j] != wp.uint8(0):
+                rampI = gradientI * d
+                rampJ = gradients[j] * d
+                slopeI = wp.dot(d, rampI)
+                slopeJ = wp.dot(d, rampJ)
+                limiter = float(0.0)
+                if slopeI * slopeJ > 0.0:
+                    ratio = slopeI / slopeJ
+                    limiter = wp.min(1.0, 4.0 * ratio / ((1.0 + ratio) * (1.0 + ratio)))
+                    eta = r / h
+                    if eta < closeDistance:
+                        fade = (eta - closeDistance) / foldWidth
+                        limiter = limiter * wp.exp(-fade * fade)
+                approach = wp.dot(velocityI - velocities[j] - (0.5 * limiter) * (rampI + rampJ), d)
             if approach < 0.0:
-                mu = h * approach / (r * r + softening)
+                mu = h * approach / (r * r + viscositySoftening * h * h)
                 viscosity = -alpha * soundSpeed * mu / (0.5 * (densityI + densityJ))
                 if fluid[j] == wp.uint8(0):
                     viscosity = viscosity * boundaryFactor
             coefficient = -(own + pressures[j] / (densityJ * densityJ) + viscosity) * masses[j]
-            total += coefficient * cubicSlope(r, h, sigma) / r * d
+            total += coefficient * kernelSlope(r, h, normalization(sigmaUnit, h, dims), kind) / r * d
     result[i] = total + gravity
+
+@wp.func
+def hydrostaticDifference(vertical: float, meanDeviation: float, referenceDensity: float, gravityOverSound: float) -> float:
+
+    '''
+
+    `sphSolver.hydrostaticDensityDifference`: rho0 (g / c0^2) (z_i - z_j) (rho_bar / rho0)^(2 - gamma),
+    gamma = 7, with rho_bar / rho0 = 1 + the mean deviation over rho0.
+
+    '''
+
+    ratio = 1.0 + meanDeviation / referenceDensity
+    square = ratio * ratio
+    return referenceDensity * gravityOverSound * vertical / (square * square * ratio)
 
 @wp.kernel
 def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
-                     precise: int, period: float, velocities: wp.array(dtype = wp.vec3),
-                     masses: wp.array(dtype = float), fluid: wp.array(dtype = wp.uint8), h: float, sigma: float,
+                     precise: int, period: float, kind: int, velocities: wp.array(dtype = wp.vec3),
+                     masses: wp.array(dtype = float), fluid: wp.array(dtype = wp.uint8),
+                     lengths: wp.array(dtype = float), maxLength: float, sigmaUnit: float, dims: int,
+                     diffusion: int, diffusionFactor: float, densities: wp.array(dtype = float),
+                     deviations: wp.array(dtype = float), referenceDensity: float, gravityOverSound: float,
+                     vertical: int, corrections: wp.array(dtype = wp.mat33), corrected: int,
                      result: wp.array(dtype = float)):
 
-    '''d rho_i / dt = sum_j m_j (v_i - v_j) . grad W_ij over pairs with a fluid member.'''
+    '''
+
+    d rho_i / dt = sum_j m_j (v_i - v_j) . grad W_ij over pairs with a fluid member, and with
+    `diffusion` the delta-SPH term over fluid pairs (`sphSolver.densityDiffusionRate`): 1 for
+    Molteni and Colagrossi's, 2 with the hydrostatic part subtracted. `diffusionFactor` is
+    2 delta c0, which each pair takes times its h_ij; `deviations` are rho - rho0, so neighbors'
+    differences keep their digits. With `corrected`, grad W_ij becomes L_i grad W_ij
+    (`correctionKernel`). Each pair is taken at h_ij = (h_i + h_j) / 2.
+
+    '''
 
     i = wp.hash_grid_point_id(grid, wp.tid())
-    support = 2.0 * h
-    limit = candidateMargin * support * support
+    lengthI = lengths[i]
+    reach = lengthI + maxLength
+    limit = candidateMargin * reach * reach
     pointI = points[i]
     lowI = lows[i]
     velocityI = velocities[i]
     boundaryI = fluid[i] == wp.uint8(0)
+    diffuses = diffusion != 0 and not boundaryI
+    deviationI = float(0.0)
+    if diffuses:
+        deviationI = deviations[i]
+    correction = wp.identity(n = 3, dtype = float)
+    if corrected != 0:
+        correction = corrections[i]
+    total = float(0.0)
+    for image in range(imageCount(pointI, period, reach)):
+        offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
+        origin = pointI + offset
+        query = wp.hash_grid_query(grid, origin, reach)
+        j = int(0)
+        while wp.hash_grid_query_next(query, j):
+            pointJ = points[j]
+            coarse = origin - pointJ
+            if wp.dot(coarse, coarse) >= limit or j == i:
+                continue
+            if boundaryI and fluid[j] == wp.uint8(0):
+                continue
+            d = separation(coarse, pointI, pointJ, lowI, lows[j], offset, precise)
+            r = wp.length(d)
+            h = 0.5 * (lengthI + lengths[j])
+            if r >= 2.0 * h or r < 1.0e-12:
+                continue
+            slope = kernelSlope(r, h, normalization(sigmaUnit, h, dims), kind)
+            if corrected != 0:
+                total += masses[j] * wp.dot(velocityI - velocities[j], correction * d) * slope / r
+            else:
+                total += masses[j] * wp.dot(velocityI - velocities[j], d) * slope / r
+            if diffuses and fluid[j] != wp.uint8(0):
+                deviationJ = deviations[j]
+                difference = deviationJ - deviationI
+                if diffusion == 2:
+                    difference -= hydrostaticDifference(d[vertical], 0.5 * (deviationI + deviationJ), referenceDensity,
+                                                        gravityOverSound)
+                total += diffusionFactor * h * masses[j] / densities[j] * difference * (-slope * r) \
+                    / (r * r + viscositySoftening * h * h)
+    result[i] = total
+
+@wp.kernel
+def correctionKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
+                     precise: int, period: float, kind: int, masses: wp.array(dtype = float),
+                     densities: wp.array(dtype = float), fluid: wp.array(dtype = wp.uint8),
+                     lengths: wp.array(dtype = float), maxLength: float, sigmaUnit: float, dims: int,
+                     planar: int, floor: float, result: wp.array(dtype = wp.mat33)):
+
+    '''
+
+    `sphSolver.correctionMatrices`: L_i = M_i^-1, M_i = sum_j V_j (x_j - x_i) (x) grad_i W_ij, the
+    identity on the boundary and where det M < `floor`. In 2D (`planar`) the unused third axis
+    carries a one on M's diagonal. Each pair is taken at h_ij = (h_i + h_j) / 2.
+
+    '''
+
+    i = wp.hash_grid_point_id(grid, wp.tid())
+    identity = wp.identity(n = 3, dtype = float)
+    if fluid[i] == wp.uint8(0):
+        result[i] = identity
+        return
+    lengthI = lengths[i]
+    reach = lengthI + maxLength
+    limit = candidateMargin * reach * reach
+    pointI = points[i]
+    lowI = lows[i]
+    total = wp.mat33(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    for image in range(imageCount(pointI, period, reach)):
+        offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
+        origin = pointI + offset
+        query = wp.hash_grid_query(grid, origin, reach)
+        j = int(0)
+        while wp.hash_grid_query_next(query, j):
+            pointJ = points[j]
+            coarse = origin - pointJ
+            if wp.dot(coarse, coarse) >= limit or j == i:
+                continue
+            d = separation(coarse, pointI, pointJ, lowI, lows[j], offset, precise)
+            r = wp.length(d)
+            h = 0.5 * (lengthI + lengths[j])
+            if r >= 2.0 * h or r < 1.0e-12:
+                continue
+            slope = kernelSlope(r, h, normalization(sigmaUnit, h, dims), kind)
+            total += (-masses[j] / densities[j] * slope / r) * wp.outer(d, d)
+    if planar != 0:
+        total += wp.mat33(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+    if wp.determinant(total) >= floor:
+        result[i] = wp.inverse(total)
+    else:
+        result[i] = identity
+
+@wp.kernel
+def velocityGradientKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
+                           precise: int, period: float, kind: int, velocities: wp.array(dtype = wp.vec3),
+                           masses: wp.array(dtype = float), densities: wp.array(dtype = float),
+                           fluid: wp.array(dtype = wp.uint8), lengths: wp.array(dtype = float), maxLength: float,
+                           sigmaUnit: float, dims: int, planar: int, floor: float,
+                           result: wp.array(dtype = wp.mat33)):
+
+    '''
+
+    `sphSolver.velocityGradients`: G_i = S_i M_i^-1 over fluid neighbors, S_i = sum_j V_j
+    (v_j - v_i) (x) grad_i W_ij and M_i = sum_j V_j (x_j - x_i) (x) grad_i W_ij; zero on the
+    boundary and where det M < `floor`. In 2D (`planar`) the unused third axis carries a one on M's
+    diagonal. Each pair is taken at h_ij = (h_i + h_j) / 2.
+
+    '''
+
+    i = wp.hash_grid_point_id(grid, wp.tid())
+    zero = wp.mat33(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    if fluid[i] == wp.uint8(0):
+        result[i] = zero
+        return
+    lengthI = lengths[i]
+    reach = lengthI + maxLength
+    limit = candidateMargin * reach * reach
+    pointI = points[i]
+    lowI = lows[i]
+    velocityI = velocities[i]
+    rises = zero
+    offsets = zero
+    for image in range(imageCount(pointI, period, reach)):
+        offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
+        origin = pointI + offset
+        query = wp.hash_grid_query(grid, origin, reach)
+        j = int(0)
+        while wp.hash_grid_query_next(query, j):
+            pointJ = points[j]
+            coarse = origin - pointJ
+            if wp.dot(coarse, coarse) >= limit or j == i or fluid[j] == wp.uint8(0):
+                continue
+            d = separation(coarse, pointI, pointJ, lowI, lows[j], offset, precise)
+            r = wp.length(d)
+            h = 0.5 * (lengthI + lengths[j])
+            if r >= 2.0 * h or r < 1.0e-12:
+                continue
+            weight = masses[j] / densities[j] * kernelSlope(r, h, normalization(sigmaUnit, h, dims), kind) / r
+            # grad_i W_ij = slope d / r, and x_j - x_i = -d
+            rises += weight * wp.outer(velocities[j] - velocityI, d)
+            offsets += -weight * wp.outer(d, d)
+    if planar != 0:
+        offsets += wp.mat33(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
+    if wp.determinant(offsets) >= floor:
+        result[i] = rises * wp.inverse(offsets)
+    else:
+        result[i] = zero
+
+@wp.kernel
+def xsphKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
+               precise: int, period: float, kind: int, velocities: wp.array(dtype = wp.vec3), densities: wp.array(dtype = float),
+               masses: wp.array(dtype = float), fluid: wp.array(dtype = wp.uint8),
+               lengths: wp.array(dtype = float), maxLength: float, sigmaUnit: float, dims: int,
+               epsilon: float, result: wp.array(dtype = wp.vec3)):
+
+    '''v_i + epsilon sum_j (m_j / rho_bar_ij) (v_j - v_i) W_ij over fluid pairs; boundary rows unchanged.'''
+
+    i = wp.hash_grid_point_id(grid, wp.tid())
+    velocityI = velocities[i]
+    if fluid[i] == wp.uint8(0):
+        result[i] = velocityI
+        return
+    lengthI = lengths[i]
+    reach = lengthI + maxLength
+    limit = candidateMargin * reach * reach
+    pointI = points[i]
+    lowI = lows[i]
+    densityI = densities[i]
+    correction = wp.vec3(0.0, 0.0, 0.0)
+    for image in range(imageCount(pointI, period, reach)):
+        offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
+        origin = pointI + offset
+        query = wp.hash_grid_query(grid, origin, reach)
+        j = int(0)
+        while wp.hash_grid_query_next(query, j):
+            pointJ = points[j]
+            coarse = origin - pointJ
+            if wp.dot(coarse, coarse) >= limit or j == i:
+                continue
+            if fluid[j] == wp.uint8(0):
+                continue
+            d = separation(coarse, pointI, pointJ, lowI, lows[j], offset, precise)
+            r = wp.length(d)
+            h = 0.5 * (lengthI + lengths[j])
+            if r >= 2.0 * h:
+                continue
+            value = kernelValue(r, h, normalization(sigmaUnit, h, dims), kind)
+            weight = masses[j] * value / (0.5 * (densityI + densities[j]))
+            correction += weight * (velocities[j] - velocityI)
+    result[i] = velocityI + epsilon * correction
+
+@wp.kernel
+def shepardKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
+                  precise: int, period: float, kind: int, densities: wp.array(dtype = float), masses: wp.array(dtype = float),
+                  lengths: wp.array(dtype = float), maxLength: float, sigmaUnit: float, dims: int, result: wp.array(dtype = float)):
+
+    '''rho_i = sum_j m_j W_ij / sum_j (m_j / rho_j) W_ij, the particle itself included, at h_ij = (h_i + h_j) / 2.'''
+
+    i = wp.hash_grid_point_id(grid, wp.tid())
+    lengthI = lengths[i]
+    reach = lengthI + maxLength
+    limit = candidateMargin * reach * reach
+    pointI = points[i]
+    lowI = lows[i]
+    own = normalization(sigmaUnit, lengthI, dims)
+    numerator = masses[i] * own
+    denominator = masses[i] / densities[i] * own
+    for image in range(imageCount(pointI, period, reach)):
+        offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
+        origin = pointI + offset
+        query = wp.hash_grid_query(grid, origin, reach)
+        j = int(0)
+        while wp.hash_grid_query_next(query, j):
+            pointJ = points[j]
+            coarse = origin - pointJ
+            if wp.dot(coarse, coarse) >= limit or j == i:
+                continue
+            d = separation(coarse, pointI, pointJ, lowI, lows[j], offset, precise)
+            r = wp.length(d)
+            h = 0.5 * (lengthI + lengths[j])
+            if r >= 2.0 * h:
+                continue
+            value = kernelValue(r, h, normalization(sigmaUnit, h, dims), kind)
+            numerator += masses[j] * value
+            denominator += masses[j] / densities[j] * value
+    result[i] = numerator / denominator
+
+@wp.kernel
+def wallPressureKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
+                       precise: int, period: float, kind: int, fluid: wp.array(dtype = wp.uint8),
+                       densities: wp.array(dtype = float), pressures: wp.array(dtype = float),
+                       lengths: wp.array(dtype = float), maxLength: float, sigmaUnit: float, dims: int, gravity: wp.vec3, referenceDensity: wp.float64, stiffness: wp.float64,
+                       densities64: wp.array(dtype = wp.float64)):
+
+    '''
+
+    `sphSolver.extrapolatedWallPressure` on each boundary particle, with the density that carries
+    the pressure. Only boundary entries are written and only fluid entries read.
+
+    '''
+
+    i = wp.hash_grid_point_id(grid, wp.tid())
+    if fluid[i] != wp.uint8(0):
+        return
+    lengthI = lengths[i]
+    reach = lengthI + maxLength
+    limit = candidateMargin * reach * reach
+    pointI = points[i]
+    lowI = lows[i]
+    weight = float(0.0)
+    total = float(0.0)
+    for image in range(imageCount(pointI, period, reach)):
+        offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
+        origin = pointI + offset
+        query = wp.hash_grid_query(grid, origin, reach)
+        j = int(0)
+        while wp.hash_grid_query_next(query, j):
+            if fluid[j] == wp.uint8(0):
+                continue
+            pointJ = points[j]
+            coarse = origin - pointJ
+            if wp.dot(coarse, coarse) >= limit:
+                continue
+            d = separation(coarse, pointI, pointJ, lowI, lows[j], offset, precise)
+            r = wp.length(d)
+            h = 0.5 * (lengthI + lengths[j])
+            if r >= 2.0 * h:
+                continue
+            value = kernelValue(r, h, normalization(sigmaUnit, h, dims), kind)
+            weight += value
+            total += value * (pressures[j] + densities[j] * wp.dot(gravity, d))
+    pressure = float(0.0)
+    if weight > 0.0:
+        pressure = wp.max(total / weight, 0.0)
+    pressures[i] = pressure
+    density = referenceDensity * wp.pow(wp.float64(1.0) + wp.float64(pressure) / stiffness, wp.float64(1.0 / 7.0))
+    densities64[i] = density
+    densities[i] = wp.float32(density)
+
+@wp.kernel
+def shiftingFieldsKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
+                         precise: int, period: float, kind: int, densities: wp.array(dtype = float),
+                         deviations: wp.array(dtype = float), masses: wp.array(dtype = float),
+                         fluid: wp.array(dtype = wp.uint8), h: float, sigma: float, spacingKernel: float,
+                         antiClumping: float, lopsidedness: float, gradients: wp.array(dtype = wp.vec3),
+                         normals: wp.array(dtype = wp.vec3), divergence: wp.array(dtype = float),
+                         densityGradients: wp.array(dtype = wp.vec3)):
+
+    '''
+
+    `sphSolver.shiftingFields` on the fluid, over every neighbor: grad C with the anti-clumping
+    weight, grad C0 without it, div r and grad rho, its differences from the deviations rho - rho0.
+    div r marks the free surface for `shiftKernel`: a lopsided support (`sphSolver.freeSurface`)
+    sets it to -1, and a boundary particle's is set high, so no boundary particle reads as one.
+
+    '''
+
+    i = wp.hash_grid_point_id(grid, wp.tid())
+    zero = wp.vec3(0.0, 0.0, 0.0)
+    if fluid[i] == wp.uint8(0):
+        gradients[i] = zero
+        normals[i] = zero
+        divergence[i] = 1.0e6
+        densityGradients[i] = zero
+        return
+    support = 2.0 * h
+    limit = candidateMargin * support * support
+    pointI = points[i]
+    lowI = lows[i]
+    deviationI = deviations[i]
+    gradient = zero
+    plain = zero
+    densityGradient = zero
     total = float(0.0)
     for image in range(imageCount(pointI, period, support)):
         offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
@@ -248,34 +682,57 @@ def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: w
             coarse = origin - pointJ
             if wp.dot(coarse, coarse) >= limit or j == i:
                 continue
-            if boundaryI and fluid[j] == wp.uint8(0):
-                continue
             d = separation(coarse, pointI, pointJ, lowI, lows[j], offset, precise)
             r = wp.length(d)
             if r >= support or r < 1.0e-12:
                 continue
-            total += masses[j] * wp.dot(velocityI - velocities[j], d) * cubicSlope(r, h, sigma) / r
-    result[i] = total
+            volume = masses[j] / densities[j]
+            slope = kernelSlope(r, h, sigma, kind)
+            ratio = kernelValue(r, h, sigma, kind) / spacingKernel
+            square = ratio * ratio
+            weighted = volume * slope / r * d
+            plain += weighted
+            gradient += (1.0 + antiClumping * square * square) * weighted
+            densityGradient += (deviations[j] - deviationI) * weighted
+            total -= volume * slope * r
+    gradients[i] = gradient
+    normals[i] = plain
+    if h * wp.length(plain) > lopsidedness:
+        total = -1.0
+    divergence[i] = total
+    densityGradients[i] = densityGradient
 
 @wp.kernel
-def xsphKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
-               precise: int, period: float, velocities: wp.array(dtype = wp.vec3), densities: wp.array(dtype = float),
-               masses: wp.array(dtype = float), fluid: wp.array(dtype = wp.uint8), h: float, sigma: float,
-               epsilon: float, result: wp.array(dtype = wp.vec3)):
+def shiftKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3), precise: int,
+                period: float, kind: int, fluid: wp.array(dtype = wp.uint8), divergence: wp.array(dtype = float),
+                gradients: wp.array(dtype = wp.vec3), normals: wp.array(dtype = wp.vec3),
+                densityGradients: wp.array(dtype = wp.vec3), velocities: wp.array(dtype = wp.vec3),
+                densities: wp.array(dtype = float), masses: wp.array(dtype = float), h: float, sigma: float,
+                threshold: float, surfaceGradient: float, size: float, local: int, shifts: wp.array(dtype = wp.vec3),
+                densityChanges: wp.array(dtype = float), velocityChanges: wp.array(dtype = wp.vec3)):
 
-    '''v_i + epsilon sum_j (m_j / rho_bar_ij) (v_j - v_i) W_ij over fluid pairs; boundary rows unchanged.'''
+    '''
+
+    `sphSolver.shiftingDisplacement`: no shift on the free surface or the boundary, the shift along
+    the surface with a surface particle within the support, across the normal of
+    `sphSolver.shiftingDisplacement`, the full shift elsewhere, and the density and velocity changes
+    that go with it (`sphSolver.shiftedVelocityChange`).
+
+    '''
 
     i = wp.hash_grid_point_id(grid, wp.tid())
-    velocityI = velocities[i]
-    if fluid[i] == wp.uint8(0):
-        result[i] = velocityI
+    zero = wp.vec3(0.0, 0.0, 0.0)
+    if fluid[i] == wp.uint8(0) or divergence[i] < threshold:
+        shifts[i] = zero
+        densityChanges[i] = 0.0
+        velocityChanges[i] = zero
         return
     support = 2.0 * h
     limit = candidateMargin * support * support
     pointI = points[i]
     lowI = lows[i]
-    densityI = densities[i]
-    correction = wp.vec3(0.0, 0.0, 0.0)
+    vicinity = int(0)
+    normal = zero
     for image in range(imageCount(pointI, period, support)):
         offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
         origin = pointI + offset
@@ -284,50 +741,51 @@ def xsphKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.arra
         while wp.hash_grid_query_next(query, j):
             pointJ = points[j]
             coarse = origin - pointJ
-            if wp.dot(coarse, coarse) >= limit or j == i:
-                continue
-            if fluid[j] == wp.uint8(0):
+            if wp.dot(coarse, coarse) >= limit or j == i or divergence[j] >= threshold:
                 continue
             d = separation(coarse, pointI, pointJ, lowI, lows[j], offset, precise)
             r = wp.length(d)
-            if r >= support:
-                continue
-            weight = masses[j] * cubicValue(r, h, sigma) / (0.5 * (densityI + densities[j]))
-            correction += weight * (velocities[j] - velocityI)
-    result[i] = velocityI + epsilon * correction
+            if r < support:
+                vicinity = 1
+                plain = normals[j]
+                length = wp.length(plain)
+                if length > 0.0:
+                    normal -= kernelValue(r, h, sigma, kind) / length * plain
+    scale = size
+    if local != 0:
+        scale = size * wp.length(velocities[i])
+    shift = -scale * gradients[i]
+    if vicinity != 0:
+        if h * wp.length(gradients[i]) > surfaceGradient:
+            shift = zero
+        weight = wp.length(normal)
+        if weight > 0.0:
+            normal = normal / weight
+            shift = shift - wp.dot(shift, normal) * normal
+    shifts[i] = shift
+    densityChanges[i] = wp.dot(shift, densityGradients[i])
 
-@wp.kernel
-def shepardKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
-                  precise: int, period: float, densities: wp.array(dtype = float), masses: wp.array(dtype = float),
-                  h: float, sigma: float, result: wp.array(dtype = float)):
-
-    '''rho_i = sum_j m_j W_ij / sum_j (m_j / rho_j) W_ij, the particle itself included.'''
-
-    i = wp.hash_grid_point_id(grid, wp.tid())
-    support = 2.0 * h
-    limit = candidateMargin * support * support
-    pointI = points[i]
-    lowI = lows[i]
-    numerator = masses[i] * sigma
-    denominator = masses[i] / densities[i] * sigma
-    for image in range(imageCount(pointI, period, support)):
-        offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
-        origin = pointI + offset
-        query = wp.hash_grid_query(grid, origin, support)
-        j = int(0)
-        while wp.hash_grid_query_next(query, j):
-            pointJ = points[j]
-            coarse = origin - pointJ
-            if wp.dot(coarse, coarse) >= limit or j == i:
-                continue
-            d = separation(coarse, pointI, pointJ, lowI, lows[j], offset, precise)
-            r = wp.length(d)
-            if r >= support:
-                continue
-            value = cubicValue(r, h, sigma)
-            numerator += masses[j] * value
-            denominator += masses[j] / densities[j] * value
-    result[i] = numerator / denominator
+    # The velocity at the new position: sum_j V_j (v_j - v_i) (grad W_ij . delta r_i) over fluid neighbors
+    velocityI = velocities[i]
+    change = zero
+    if wp.length(shift) > 0.0:
+        for image in range(imageCount(pointI, period, support)):
+            offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
+            origin = pointI + offset
+            query = wp.hash_grid_query(grid, origin, support)
+            j = int(0)
+            while wp.hash_grid_query_next(query, j):
+                pointJ = points[j]
+                coarse = origin - pointJ
+                if wp.dot(coarse, coarse) >= limit or j == i or fluid[j] == wp.uint8(0):
+                    continue
+                d = separation(coarse, pointI, pointJ, lowI, lows[j], offset, precise)
+                r = wp.length(d)
+                if r >= support or r < 1.0e-12:
+                    continue
+                slope = kernelSlope(r, h, sigma, kind)
+                change += masses[j] / densities[j] * slope / r * wp.dot(d, shift) * (velocities[j] - velocityI)
+    velocityChanges[i] = change
 
 #----------------------------------------------------------------------#
 # -- Device-Resident Step -- #
@@ -355,6 +813,15 @@ def toSingle(velocities: wp.array(dtype = wp.vec3d), densities: wp.array(dtype =
     densities32[i] = wp.float32(densities[i])
 
 @wp.kernel
+def toDeviation(densities: wp.array(dtype = wp.float64), referenceDensity: wp.float64,
+                deviations: wp.array(dtype = float)):
+
+    '''rho - rho0 in float32, taken in float64, for the diffusive term's differences.'''
+
+    i = wp.tid()
+    deviations[i] = wp.float32(densities[i] - referenceDensity)
+
+@wp.kernel
 def applyShepard(filtered: wp.array(dtype = float), fluid: wp.array(dtype = wp.uint8),
                  densities: wp.array(dtype = wp.float64), densities32: wp.array(dtype = float)):
 
@@ -367,15 +834,17 @@ def applyShepard(filtered: wp.array(dtype = float), fluid: wp.array(dtype = wp.u
 
 @wp.kernel
 def equationOfState(densities: wp.array(dtype = wp.float64), referenceDensity: wp.float64, stiffness: wp.float64,
-                    pressures: wp.array(dtype = float)):
+                    fluid: wp.array(dtype = wp.uint8), tension: int, pressures: wp.array(dtype = float)):
 
-    '''Tait pressure B ((rho / rho0)^7 - 1), negative pressure clamped to zero.'''
+    '''Tait pressure B ((rho / rho0)^7 - 1), negative pressure clamped to zero except in the fluid with `tension`.'''
 
     i = wp.tid()
     ratio = densities[i] / referenceDensity
     square = ratio * ratio
     pressure = stiffness * (square * square * square * ratio - wp.float64(1.0))
-    pressures[i] = wp.float32(wp.max(pressure, wp.float64(0.0)))
+    if tension == 0 or fluid[i] == wp.uint8(0):
+        pressure = wp.max(pressure, wp.float64(0.0))
+    pressures[i] = wp.float32(pressure)
 
 @wp.kernel
 def fluidMaxima(velocities: wp.array(dtype = wp.vec3d), accelerations: wp.array(dtype = wp.vec3),
@@ -418,10 +887,17 @@ def advanceDensity(densities: wp.array(dtype = wp.float64), rates: wp.array(dtyp
 
 @wp.kernel
 def drift(positions: wp.array(dtype = wp.vec3d), transport: wp.array(dtype = wp.vec3),
-          velocities: wp.array(dtype = wp.vec3d), useTransport: int, fluid: wp.array(dtype = wp.uint8),
-          timeStep: wp.float64, period: wp.float64):
+          velocities: wp.array(dtype = wp.vec3d), useTransport: int, shifts: wp.array(dtype = wp.vec3),
+          densityChanges: wp.array(dtype = float), velocityChanges: wp.array(dtype = wp.vec3), useShifts: int,
+          densities: wp.array(dtype = wp.float64), fluid: wp.array(dtype = wp.uint8), timeStep: wp.float64,
+          period: wp.float64):
 
-    '''x += u dt on the fluid, u the XSPH transport velocity or the velocity; y wrapped onto the period.'''
+    '''
+
+    x += u dt on the fluid, u the XSPH transport velocity or the velocity, plus the shift and its
+    density and velocity changes when shifting; y wrapped onto the period.
+
+    '''
 
     i = wp.tid()
     if fluid[i] == wp.uint8(0):
@@ -430,6 +906,10 @@ def drift(positions: wp.array(dtype = wp.vec3d), transport: wp.array(dtype = wp.
     if useTransport != 0:
         velocity = double(transport[i])
     x = positions[i] + velocity * timeStep
+    if useShifts != 0:
+        x = x + double(shifts[i])
+        densities[i] = densities[i] + wp.float64(densityChanges[i])
+        velocities[i] = velocities[i] + double(velocityChanges[i])
     if period > wp.float64(0.0):
         x = wp.vec3d(x[0], x[1] - period * wp.floor(x[1] / period), x[2])
     positions[i] = x
@@ -544,6 +1024,40 @@ def cubicSplineNormalization(smoothingLength: float, dimensions: int) -> float:
     h = smoothingLength
     return 10.0 / (7.0 * math.pi * h * h) if dimensions == 2 else 1.0 / (math.pi * h * h * h)
 
+def wendlandNormalization(smoothingLength: float, dimensions: int) -> float:
+
+    '''The Wendland C2's sigma: 7 / (4 pi h^2) in 2D, 21 / (16 pi h^3) in 3D.'''
+
+    h = smoothingLength
+    return 7.0 / (4.0 * math.pi * h * h) if dimensions == 2 else 21.0 / (16.0 * math.pi * h * h * h)
+
+def kernelNormalization(kernelType: str, smoothingLength: float, dimensions: int) -> float:
+
+    '''The sigma of 'cubicSpline' or 'wendlandC2'.'''
+
+    if kernelType == 'wendlandC2':
+        return wendlandNormalization(smoothingLength, dimensions)
+    return cubicSplineNormalization(smoothingLength, dimensions)
+
+def hostKernelValue(kernelType: str, r: float, smoothingLength: float, dimensions: int) -> float:
+
+    '''W(r) on the host, as `kernelValue` gives it on the device.'''
+
+    if kernelType == 'wendlandC2':
+        q = r / smoothingLength
+        return wendlandNormalization(smoothingLength, dimensions) * max(1.0 - 0.5 * q, 0.0)**4 * (2.0 * q + 1.0)
+    return cubicSplineValue(r, smoothingLength, dimensions)
+
+def cubicSplineValue(r: float, smoothingLength: float, dimensions: int) -> float:
+
+    '''The cubic spline W(r) on the host, as `cubicValue` gives it on the device.'''
+
+    q = r / smoothingLength
+    sigma = cubicSplineNormalization(smoothingLength, dimensions)
+    if q < 1.0:
+        return sigma * (1.0 - 1.5 * q * q + 0.75 * q**3)
+    return sigma * 0.25 * max(2.0 - q, 0.0)**3
+
 def gridDimensions(domainMin: np.ndarray, domainMax: np.ndarray, cellSize: float, dimensions: int) -> tuple:
 
     '''Hash grid cells along x, y and z covering the domain, one support across, capped at `maxGridCells`.'''
@@ -595,21 +1109,32 @@ class PairSums:
     separationPrecision : str
         'float64' to take pair separations from the float64 positions' point and remainder,
         'float32' from the float32 points alone
+    kernelType : str
+        'cubicSpline' or 'wendlandC2', both supported on 2h
     device : str | None
         Warp device, 'cuda:0' or 'cpu'; None for Warp's preferred device
 
     '''
 
     def __init__(self, dimensions: int, smoothingLength: float, domainMin: np.ndarray, domainMax: np.ndarray,
-                 period: float = 0.0, separationPrecision: str = 'float64', device: str | None = None) -> None:
+                 period: float = 0.0, separationPrecision: str = 'float64', device: str | None = None,
+                 kernelType: str = 'cubicSpline') -> None:
 
         if separationPrecision not in ('float64', 'float32'):
             raise ValueError(f"Separation precision '{separationPrecision}' is not 'float64' or 'float32'.")
+        if kernelType not in ('cubicSpline', 'wendlandC2'):
+            raise ValueError(f"Kernel '{kernelType}' is not 'cubicSpline' or 'wendlandC2'.")
         if period > 0.0 and dimensions != 3:
             raise ValueError('A periodic axis needs three dimensions: it is y.')
         self.dimensions = dimensions
         self.smoothingLength = float(smoothingLength)                    # [m]
-        self.sigma = cubicSplineNormalization(smoothingLength, dimensions)
+        self.kernelType = kernelType
+        self.kind = 1 if kernelType == 'wendlandC2' else 0
+        self.sigma = kernelNormalization(kernelType, smoothingLength, dimensions)
+        self.sigmaUnit = kernelNormalization(kernelType, 1.0, dimensions)    # sigma h^dims
+        self.maxLength = self.smoothingLength                            # [m], sizes the grid's cells
+        self.minLength = self.smoothingLength                            # [m], sets the time step
+        self.uniformLengths = True
         self.period = float(period)                                      # [m]
         self.precise = 1 if separationPrecision == 'float64' else 0
         self.device = wp.get_device(device)
@@ -617,6 +1142,14 @@ class PairSums:
                                 device = self.device)
         self.count = 0
         self.physics: dict = {}
+        self.diffusion = {'mode': 0, 'factor': 0.0, 'referenceDensity': 1000.0, 'gravityOverSound': 0.0}
+        self.shifting = {'enabled': False, 'mach': 0.0, 'spacingKernel': 1.0, 'soundSpeed': 1.0,
+                         'threshold': freeSurfaceDivergence[dimensions], 'local': False}
+        self.extrapolateWalls = False
+        self.negativePressure = False
+        self.correctContinuity = False
+        self.limitViscosity = False
+        self._noCorrections = wp.zeros(1, dtype = wp.mat33, device = self.device)
         self._enforcement: tuple | None = None
         self._capacity = 0
         self._device: dict[str, wp.array] = {}
@@ -631,7 +1164,12 @@ class PairSums:
         if count <= self._capacity:
             return
         capacity = max(count, int(1.25 * self._capacity))
-        self._device = {name: wp.zeros(capacity, dtype = dtype, device = self.device) for name, dtype in layout.items()}
+        fields = {**layout, **shiftingLayout} if self.shifting['enabled'] else dict(layout)
+        if self.correctContinuity:
+            fields['corrections'] = wp.mat33
+        if self.limitViscosity:
+            fields['gradients'] = wp.mat33
+        self._device = {name: wp.zeros(capacity, dtype = dtype, device = self.device) for name, dtype in fields.items()}
         self._staging = {}
         self._capacity = capacity
 
@@ -640,8 +1178,8 @@ class PairSums:
         '''The pinned host array a field passes through, made on first use: only host steps need them.'''
 
         if name not in self._staging:
-            self._staging[name] = wp.zeros(self._capacity, dtype = layout[name], device = 'cpu',
-                                           pinned = self.device.is_cuda)
+            dtype = layout[name] if name in layout else shiftingLayout[name]
+            self._staging[name] = wp.zeros(self._capacity, dtype = dtype, device = 'cpu', pinned = self.device.is_cuda)
         return self._staging[name]
 
     def _upload(self, name: str, values: np.ndarray) -> wp.array:
@@ -684,16 +1222,209 @@ class PairSums:
 
     @property
     def _geometry(self) -> list:
-        '''The pair kernels' leading arguments: grid, points, remainders, precision flag, period.'''
+        '''The pair kernels' leading arguments: grid, points, remainders, precision flag, period, kernel.'''
         d = self._device
-        return [self.grid.id, d['points'], d['lows'], self.precise, self.period]
+        return [self.grid.id, d['points'], d['lows'], self.precise, self.period, self.kind]
 
-    # -- Host Steps -- #
-    def update(self, positions: np.ndarray, masses: np.ndarray, isFluid: np.ndarray) -> None:
+    @property
+    def _lengthInputs(self) -> list:
+        '''The converted pair kernels' smoothing-length arguments: each particle's h, the largest, sigma h^dims, dims.'''
+        return [self._device['lengths'], self.maxLength, self.sigmaUnit, self.dimensions]
+
+    @property
+    def _diffusionInputs(self) -> list:
+        '''The continuity kernel's diffusion and correction arguments, after the kernel constants.'''
+        d, diffusion = self._device, self.diffusion
+        corrections = d['corrections'] if self.correctContinuity else self._noCorrections
+        return [diffusion['mode'], diffusion['factor'], d['densities'], d['deviations'], diffusion['referenceDensity'],
+                diffusion['gravityOverSound'], self.dimensions - 1, corrections, int(self.correctContinuity)]
+
+    def _correct(self) -> None:
+
+        '''This step's correction matrices into 'corrections', from the float32 densities on the device.'''
+
+        d = self._device
+        self._launch(correctionKernel, self._geometry + [d['masses'], d['densities'], d['fluid']] + self._lengthInputs
+                     + [1 if self.dimensions == 2 else 0, correctionFloor**self.dimensions, d['corrections']])
+
+    def setContinuityCorrection(self, enabled: bool) -> None:
+
+        '''Whether the continuity sum takes the kernel gradient correction (`sphSolver.correctionMatrices`).'''
+
+        self.correctContinuity = bool(enabled)
+        if enabled and self._capacity and 'corrections' not in self._device:
+            self._device['corrections'] = wp.zeros(self._capacity, dtype = wp.mat33, device = self.device)
+
+    def _velocityGradients(self) -> None:
+
+        '''This step's velocity gradients into 'gradients', from the float32 velocities and densities on the device.'''
+
+        d = self._device
+        self._launch(velocityGradientKernel, self._geometry + [d['velocities'], d['masses'], d['densities'], d['fluid']]
+                     + self._lengthInputs + [1 if self.dimensions == 2 else 0, correctionFloor**self.dimensions,
+                                             d['gradients']])
+
+    @property
+    def _viscosityInputs(self) -> list:
+        '''The acceleration kernel's limiter arguments: the velocity gradients and the flag.'''
+        gradients = self._device['gradients'] if self.limitViscosity else self._noCorrections
+        return [gradients, int(self.limitViscosity)]
+
+    def setViscosityLimiter(self, enabled: bool) -> None:
+
+        '''Whether the artificial viscosity takes the limited velocity difference (`sphSolver.limitedVelocityDifference`).'''
+
+        self.limitViscosity = bool(enabled)
+        if enabled and self._capacity and 'gradients' not in self._device:
+            self._device['gradients'] = wp.zeros(self._capacity, dtype = wp.mat33, device = self.device)
+
+    def velocityGradients(self, velocities: np.ndarray, densities: np.ndarray) -> np.ndarray:
+
+        '''G for every particle at the current positions, shape (N, dim, dim) (`sphSolver.velocityGradients`).'''
+
+        if not self.limitViscosity:
+            raise ValueError('The viscosity limiter is off; see setViscosityLimiter.')
+        self._upload('velocities', velocities)
+        self._upload('densities', densities)
+        self._velocityGradients()
+        wp.synchronize_device(self.device)
+        dim = self.dimensions
+
+        return self._device['gradients'].numpy()[:self.count, :dim, :dim].astype(float)
+
+    def correctionMatrices(self, densities: np.ndarray) -> np.ndarray:
+
+        '''L for every particle at the current positions, shape (N, dim, dim) (`sphSolver.correctionMatrices`).'''
+
+        if not self.correctContinuity:
+            raise ValueError('The continuity correction is off; see setContinuityCorrection.')
+        self._upload('densities', densities)
+        self._correct()
+        wp.synchronize_device(self.device)
+        dim = self.dimensions
+
+        return self._device['corrections'].numpy()[:self.count, :dim, :dim].astype(float)
+
+    def setDiffusion(self, mode: str, delta: float, soundSpeed: float, referenceDensity: float, gravity: float) -> None:
 
         '''
 
-        Copy the positions, masses and fluid flags to the device and rebuild the hash grid.
+        The delta-SPH term the continuity sum carries (`sphSolver.densityDiffusionRate`).
+
+        Parameters:
+        -----------
+        mode : str
+            'none', 'molteni' or 'hydrostatic'
+        delta : float
+            The coefficient delta
+        soundSpeed : float
+            c0 [m/s]
+        referenceDensity : float
+            rho0 [kg/m^3]
+        gravity : float
+            Gravity's magnitude along the last axis [m/s^2]
+
+        '''
+
+        # Each pair takes the factor times its own h_ij
+        self.diffusion = {'mode': diffusionModes[mode], 'factor': 2.0 * delta * soundSpeed,
+                          'referenceDensity': float(referenceDensity), 'gravityOverSound': gravity / soundSpeed**2}
+
+    def setWallPressure(self, extrapolated: bool) -> None:
+
+        '''
+
+        Whether the device steps take each boundary particle's pressure from the fluid around it
+        (`sphSolver.extrapolatedWallPressure`) rather than from its integrated density.
+
+        '''
+
+        self.extrapolateWalls = bool(extrapolated)
+
+    def setNegativePressure(self, enabled: bool) -> None:
+
+        '''Whether the device steps let the fluid carry negative pressure (`SimulationConfig.negativePressure`).'''
+
+        self.negativePressure = bool(enabled)
+
+    def setShifting(self, enabled: bool, mach: float, spacing: float, soundSpeed: float, local: bool = False) -> None:
+
+        '''
+
+        Particle shifting (`sphSolver.shiftingDisplacement`) for every step that follows.
+
+        Parameters:
+        -----------
+        enabled : bool
+            Whether the fluid shifts
+        mach : float
+            Ma in the shift's size CFL Ma (2h)^2
+        spacing : float
+            Particle spacing dx, for the anti-clumping weight's W(dx) [m]
+        soundSpeed : float
+            c0, for the step's Courant number c0 dt / h [m/s]
+        local : bool
+            Size each particle's shift by its own speed, A h |v_i| dt, rather than CFL Ma (2h)^2
+
+        '''
+
+        self.shifting = {'enabled': bool(enabled), 'mach': float(mach),
+                         'spacingKernel': hostKernelValue(self.kernelType, spacing, self.smoothingLength,
+                                                          self.dimensions),
+                         'soundSpeed': float(soundSpeed), 'threshold': freeSurfaceDivergence[self.dimensions],
+                         'local': bool(local)}
+        if enabled and not self.uniformLengths:
+            raise ValueError('Particle shifting needs one smoothing length for every particle.')
+        if enabled and self._capacity and 'shifts' not in self._device:
+            for name, dtype in shiftingLayout.items():
+                self._device[name] = wp.zeros(self._capacity, dtype = dtype, device = self.device)
+
+    def _shift(self, timeStep: float) -> None:
+
+        '''This step's shifts into the 'shifts' array, from the positions of the last grid build.'''
+
+        d, shifting, h = self._device, self.shifting, self.smoothingLength
+        if shifting['local']:
+            size = localShiftingCoefficient * h * timeStep
+        else:
+            size = (shifting['soundSpeed'] * timeStep / h) * shifting['mach'] * (2.0 * h)**2
+        if antiClumpingPower != 4:
+            raise ValueError('The device anti-clumping weight is written for the power 4.')
+        self._launch(shiftingFieldsKernel, self._geometry + [
+            d['densities'], d['deviations'], d['masses'], d['fluid'], h, self.sigma, shifting['spacingKernel'],
+            antiClumpingWeight, freeSurfaceLopsidedness[self.kernelType], d['gradients'], d['normals'], d['divergence'],
+            d['densityGradients']])
+        self._launch(shiftKernel, self._geometry + [d['fluid'], d['divergence'], d['gradients'], d['normals'],
+                                                    d['densityGradients'], d['velocities'], d['densities'],
+                                                    d['masses'], h, self.sigma, shifting['threshold'], surfaceGradient,
+                                                    size, 1 if shifting['local'] else 0, d['shifts'],
+                                                    d['densityChanges'], d['velocityChanges']])
+
+    def shiftingDisplacement(self, densities: np.ndarray, timeStep: float,
+                             velocities: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+
+        '''
+
+        This step's shift of every particle, zero on the boundary and the free surface [m], and the
+        density [kg/m^3] and velocity [m/s] changes that go with it.
+
+        '''
+
+        self._upload('velocities', velocities)
+        self._upload('densities', densities)
+        self._upload('deviations', np.asarray(densities, dtype = float) - self.diffusion['referenceDensity'])
+        self._shift(timeStep)
+
+        return self._download('shifts'), self._download('densityChanges'), self._download('velocityChanges')
+
+    # -- Host Steps -- #
+    def update(self, positions: np.ndarray, masses: np.ndarray, isFluid: np.ndarray,
+               lengths: np.ndarray | None = None) -> None:
+
+        '''
+
+        Copy the positions, masses, fluid flags and smoothing lengths to the device and rebuild the
+        hash grid.
 
         Parameters:
         -----------
@@ -703,6 +1434,13 @@ class PairSums:
             Particle masses, shape (N,) [kg]
         isFluid : np.ndarray
             True for fluid particles, shape (N,)
+        lengths : np.ndarray | None
+            Each particle's smoothing length h, shape (N,) [m], none longer than the one the sums
+            were made with, which sizes the grid's cells; None for that one throughout
+
+        Raises:
+        -------
+        ValueError : If a smoothing length exceeds the grid's, or lengths differ while shifting.
 
         '''
 
@@ -710,8 +1448,19 @@ class PairSums:
         self._reserve(self.count)
         if self.count == 0:
             return
+        if lengths is None:
+            lengths = np.full(self.count, self.smoothingLength)
+        lengths = np.asarray(lengths, dtype = float)
+        if lengths.max() > self.maxLength * (1.0 + 1e-9):
+            raise ValueError(f'A smoothing length of {lengths.max()} m exceeds the {self.maxLength} m the hash grid '
+                             f'is built for.')
+        self.minLength = float(lengths.min())
+        self.uniformLengths = bool(np.all(lengths == lengths[0]))
+        if self.shifting['enabled'] and not self.uniformLengths:
+            raise ValueError('Particle shifting needs one smoothing length for every particle.')
         self._upload('positions', positions)
         self._upload('masses', masses)
+        self._upload('lengths', lengths)
         self._upload('fluid', np.asarray(isFluid).view(np.uint8))
         self._rebuild()
 
@@ -723,21 +1472,30 @@ class PairSums:
 
         g = np.zeros(3)
         g[:self.dimensions] = gravity
-        self._launch(accelerationKernel, self._geometry + [
-            self._upload('velocities', velocities), self._upload('densities', densities),
-            self._upload('pressures', pressures), self._device['masses'], self._device['fluid'],
-            self.smoothingLength, self.sigma, soundSpeed, alpha, boundaryViscosityFactor, wp.vec3(*g),
-            self._device['vector']])
+        uploaded = [self._upload('velocities', velocities), self._upload('densities', densities),
+                    self._upload('pressures', pressures)]
+        if self.limitViscosity:
+            self._velocityGradients()
+        self._launch(accelerationKernel, self._geometry + uploaded + [self._device['masses'], self._device['fluid']]
+                     + self._lengthInputs + [soundSpeed, alpha, boundaryViscosityFactor, wp.vec3(*g)]
+                     + self._viscosityInputs + [self._device['vector']])
 
         return self._download('vector')
 
-    def continuityRate(self, velocities: np.ndarray) -> np.ndarray:
+    def continuityRate(self, velocities: np.ndarray, densities: np.ndarray | None = None) -> np.ndarray:
 
-        '''d rho / dt for every particle [kg/(m^3 s)].'''
+        '''d rho / dt for every particle, with the diffusive term `setDiffusion` set [kg/(m^3 s)].'''
 
+        if self.diffusion['mode'] != 0 or self.correctContinuity:
+            if densities is None:
+                raise ValueError('The diffusive term and the correction need the densities.')
+            self._upload('densities', densities)
+            self._upload('deviations', np.asarray(densities, dtype = float) - self.diffusion['referenceDensity'])
+        if self.correctContinuity:
+            self._correct()
         self._launch(continuityKernel, self._geometry + [
-            self._upload('velocities', velocities), self._device['masses'], self._device['fluid'],
-            self.smoothingLength, self.sigma, self._device['scalar']])
+            self._upload('velocities', velocities), self._device['masses'], self._device['fluid']]
+            + self._lengthInputs + self._diffusionInputs + [self._device['scalar']])
 
         return self._download('scalar')
 
@@ -747,16 +1505,30 @@ class PairSums:
 
         self._launch(xsphKernel, self._geometry + [
             self._upload('velocities', velocities), self._upload('densities', densities), self._device['masses'],
-            self._device['fluid'], self.smoothingLength, self.sigma, epsilon, self._device['vector']])
+            self._device['fluid']] + self._lengthInputs + [epsilon, self._device['vector']])
 
         return self._download('vector')
+
+    def wallPressure(self, densities: np.ndarray, pressures: np.ndarray, gravity: np.ndarray, referenceDensity: float,
+                     soundSpeed: float) -> np.ndarray:
+
+        '''Every pressure with the boundary's taken from the fluid (`sphSolver.extrapolatedWallPressure`) [Pa].'''
+
+        g = np.zeros(3)
+        g[:self.dimensions] = gravity
+        self._launch(wallPressureKernel, self._geometry + [
+            self._device['fluid'], self._upload('densities', densities), self._upload('pressures', pressures)]
+            + self._lengthInputs + [wp.vec3(*g), float(referenceDensity),
+            float(referenceDensity * soundSpeed**2 / taitExponent), self._device['densities64']])
+
+        return self._download('pressures')
 
     def shepardDensity(self, densities: np.ndarray) -> np.ndarray:
 
         '''The Shepard-filtered density of every particle [kg/m^3].'''
 
         self._launch(shepardKernel, self._geometry + [
-            self._upload('densities', densities), self._device['masses'], self.smoothingLength, self.sigma,
+            self._upload('densities', densities), self._device['masses']] + self._lengthInputs + [
             self._device['scalar']])
 
         return self._download('scalar')
@@ -845,7 +1617,7 @@ class PairSums:
 
         '''Copy a particle system's state to the device.'''
 
-        self.update(particles.positions, particles.masses, particles.isFluid)
+        self.update(particles.positions, particles.masses, particles.isFluid, particles.lengths)
         if self.count == 0:
             return
         d = self._device
@@ -886,15 +1658,21 @@ class PairSums:
         self._rebuild()
         self._launch(toSingle, [d['velocities64'], d['densities64'], d['velocities'], d['densities']])
         if filterDensity:
-            self._launch(shepardKernel, self._geometry + [d['densities'], d['masses'], self.smoothingLength, self.sigma,
-                                                          d['scalar']])
+            self._launch(shepardKernel, self._geometry + [d['densities'], d['masses']] + self._lengthInputs
+                         + [d['scalar']])
             self._launch(applyShepard, [d['scalar'], d['fluid'], d['densities64'], d['densities']])
-        self._launch(equationOfState, [d['densities64'], physics['referenceDensity'], physics['stiffness'],
-                                       d['pressures']])
-        self._launch(accelerationKernel, self._geometry + [
-            d['velocities'], d['densities'], d['pressures'], d['masses'], d['fluid'], self.smoothingLength, self.sigma,
-            physics['soundSpeed'], physics['alpha'], physics['boundaryViscosityFactor'], physics['gravity'],
-            d['accelerations']])
+        self._launch(equationOfState, [d['densities64'], physics['referenceDensity'], physics['stiffness'], d['fluid'],
+                                       int(self.negativePressure), d['pressures']])
+        if self.extrapolateWalls:
+            self._launch(wallPressureKernel, self._geometry + [d['fluid'], d['densities'], d['pressures']]
+                         + self._lengthInputs + [physics['gravity'], physics['referenceDensity'], physics['stiffness'],
+                                                 d['densities64']])
+        if self.limitViscosity:
+            self._velocityGradients()
+        self._launch(accelerationKernel, self._geometry + [d['velocities'], d['densities'], d['pressures'], d['masses'],
+                                                           d['fluid']] + self._lengthInputs + [
+            physics['soundSpeed'], physics['alpha'], physics['boundaryViscosityFactor'], physics['gravity']]
+                     + self._viscosityInputs + [d['accelerations']])
         self._maxima.zero_()
         self._launch(fluidMaxima, [d['velocities64'], d['accelerations'], d['fluid'], self._maxima])
         maxima = self._maxima.numpy()
@@ -914,15 +1692,25 @@ class PairSums:
         d, physics = self._device, self.physics
         epsilon = physics['xsphEpsilon']
         self._launch(kick, [d['velocities64'], d['accelerations'], d['fluid'], timeStep, d['velocities']])
-        self._launch(continuityKernel, self._geometry + [d['velocities'], d['masses'], d['fluid'], self.smoothingLength,
-                                                         self.sigma, d['scalar']])
+        if self.diffusion['mode'] != 0:
+            self._launch(toDeviation, [d['densities64'], self.diffusion['referenceDensity'], d['deviations']])
+        if self.correctContinuity:
+            self._correct()
+        self._launch(continuityKernel, self._geometry + [d['velocities'], d['masses'], d['fluid']] + self._lengthInputs
+                     + self._diffusionInputs + [d['scalar']])
         self._launch(advanceDensity, [d['densities64'], d['scalar'], d['fluid'], timeStep, physics['densityFloor'],
                                       d['densities']])
         if epsilon > 0.0:
-            self._launch(xsphKernel, self._geometry + [d['velocities'], d['densities'], d['masses'], d['fluid'],
-                                                       self.smoothingLength, self.sigma, epsilon, d['vector']])
-        self._launch(drift, [d['positions'], d['vector'], d['velocities64'], 1 if epsilon > 0.0 else 0, d['fluid'],
-                             timeStep, self.period])
+            self._launch(xsphKernel, self._geometry + [d['velocities'], d['densities'], d['masses'], d['fluid']]
+                         + self._lengthInputs + [epsilon, d['vector']])
+        shifting = self.shifting['enabled']
+        if shifting:
+            self._launch(toDeviation, [d['densities64'], self.diffusion['referenceDensity'], d['deviations']])
+            self._shift(timeStep)
+        self._launch(drift, [d['positions'], d['vector'], d['velocities64'], 1 if epsilon > 0.0 else 0,
+                             d['shifts'] if shifting else d['vector'], d['densityChanges'] if shifting else d['scalar'],
+                             d['velocityChanges'] if shifting else d['vector'], 1 if shifting else 0,
+                             d['densities64'], d['fluid'], timeStep, self.period])
         self.enforceBoundary()
 
     def enforceBoundary(self) -> None:

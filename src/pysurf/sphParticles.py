@@ -58,6 +58,9 @@ class ParticleSystem:
         Particle masses [kg]; per unit depth [kg/m] in 2D
     isFluid : np.ndarray
         True for fluid particles, False for boundary particles
+    lengths : np.ndarray | None
+        Each particle's smoothing length h [m], once particles have split
+        (`pysurf.sphRefinement`); None while every particle has the solver's
 
     '''
 
@@ -68,6 +71,7 @@ class ParticleSystem:
     pressures: np.ndarray
     masses: np.ndarray
     isFluid: np.ndarray
+    lengths: np.ndarray | None = None
 
     # -- Constructors -- #
     @classmethod
@@ -128,7 +132,7 @@ class ParticleSystem:
 
     # -- Growth -- #
     def append(self, positions: np.ndarray, velocities: np.ndarray, densities: np.ndarray, mass: float,
-               isFluid: bool = True) -> np.ndarray:
+               isFluid: bool = True, length: float | None = None) -> np.ndarray:
 
         '''
 
@@ -145,6 +149,8 @@ class ParticleSystem:
             Mass of each new particle [kg]
         isFluid : bool
             Whether the new particles are fluid
+        length : float | None
+            Smoothing length of each new particle [m]; needed once the particles carry their own
 
         Returns:
         --------
@@ -161,8 +167,18 @@ class ParticleSystem:
         self.pressures = np.concatenate([self.pressures, np.zeros(count)])
         self.masses = np.concatenate([self.masses, np.full(count, mass)])
         self.isFluid = np.concatenate([self.isFluid, np.full(count, isFluid)])
+        if self.lengths is not None:
+            if length is None:
+                raise ValueError('These particles carry their own smoothing lengths; give the new ones theirs.')
+            self.lengths = np.concatenate([self.lengths, np.full(count, float(length))])
 
         return np.arange(start, start + count)
+
+    def smoothingLengths(self, reference: float) -> np.ndarray:
+
+        '''Every particle's smoothing length [m]: its own, or `reference` while they share one.'''
+
+        return self.lengths if self.lengths is not None else np.full(self.nParticles, float(reference))
 
     # -- Counts -- #
     @property

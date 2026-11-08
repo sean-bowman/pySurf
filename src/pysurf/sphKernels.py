@@ -264,7 +264,7 @@ class CubicSplineKernel:
     # -- Vectorized (Batch) Operations -- #
     #--------------------------------------------------------------------#
 
-    def evaluateBatch(self, distances: np.ndarray, h: float) -> np.ndarray:
+    def evaluateBatch(self, distances: np.ndarray, h: float | np.ndarray) -> np.ndarray:
 
         '''
 
@@ -276,8 +276,8 @@ class CubicSplineKernel:
         -----------
         distances : np.ndarray
             Array of distances [m], shape (N,)
-        h : float
-            Smoothing length [m]
+        h : float | np.ndarray
+            Smoothing length [m]: one for every distance, or one each
 
         Returns:
         --------
@@ -285,23 +285,24 @@ class CubicSplineKernel:
 
         '''
         q = distances / h
-        sigma = self._normalization(h)
+        # One h for every pair, or each pair's own
+        sigma = np.broadcast_to(self._normalization(h), q.shape)
 
         result = np.zeros_like(q)
 
         # Inner region: q < 1
         inner = q < 1.0
         qInner = q[inner]
-        result[inner] = sigma * (1.0 - 1.5 * qInner ** 2 + 0.75 * qInner ** 3)
+        result[inner] = sigma[inner] * (1.0 - 1.5 * qInner ** 2 + 0.75 * qInner ** 3)
 
         # Outer region: 1 <= q < 2
         outer = (q >= 1.0) & (q < 2.0)
         twoMinusQ = 2.0 - q[outer]
-        result[outer] = sigma * 0.25 * twoMinusQ ** 3
+        result[outer] = sigma[outer] * 0.25 * twoMinusQ ** 3
 
         return result
 
-    def gradientMagnitudeBatch(self, distances: np.ndarray, h: float) -> np.ndarray:
+    def gradientMagnitudeBatch(self, distances: np.ndarray, h: float | np.ndarray) -> np.ndarray:
 
         '''
 
@@ -313,8 +314,8 @@ class CubicSplineKernel:
         -----------
         distances : np.ndarray
             Array of distances [m], shape (N,)
-        h : float
-            Smoothing length [m]
+        h : float | np.ndarray
+            Smoothing length [m]: one for every distance, or one each
 
         Returns:
         --------
@@ -322,24 +323,26 @@ class CubicSplineKernel:
 
         '''
         q = distances / h
-        sigma = self._normalization(h)
+        # One h for every pair, or each pair's own
+        sigma = np.broadcast_to(self._normalization(h), q.shape)
+        lengths = np.broadcast_to(h, q.shape)
 
         result = np.zeros_like(q)
 
         # Inner region: q < 1 (but q > 0)
         inner = (q > 1e-12) & (q < 1.0)
         qInner = q[inner]
-        result[inner] = sigma * (-3.0 * qInner + 2.25 * qInner ** 2) / h
+        result[inner] = sigma[inner] * (-3.0 * qInner + 2.25 * qInner ** 2) / lengths[inner]
 
         # Outer region: 1 <= q < 2
         outer = (q >= 1.0) & (q < 2.0)
         twoMinusQ = 2.0 - q[outer]
-        result[outer] = sigma * (-0.75 * twoMinusQ ** 2) / h
+        result[outer] = sigma[outer] * (-0.75 * twoMinusQ ** 2) / lengths[outer]
 
         return result
 
     def gradientBatch(
-        self, drVecs: np.ndarray, distances: np.ndarray, h: float
+        self, drVecs: np.ndarray, distances: np.ndarray, h: float | np.ndarray
     ) -> np.ndarray:
 
         '''
@@ -356,8 +359,8 @@ class CubicSplineKernel:
             Displacement vectors r_i - r_j, shape (N, dim)
         distances : np.ndarray
             Distances |dr|, shape (N,)
-        h : float
-            Smoothing length [m]
+        h : float | np.ndarray
+            Smoothing length [m]: one for every distance, or one each
 
         Returns:
         --------
@@ -531,7 +534,7 @@ class WendlandC2Kernel:
     # -- Vectorized (Batch) Operations -- #
     #--------------------------------------------------------------------#
 
-    def evaluateBatch(self, distances: np.ndarray, h: float) -> np.ndarray:
+    def evaluateBatch(self, distances: np.ndarray, h: float | np.ndarray) -> np.ndarray:
 
         '''
 
@@ -543,8 +546,8 @@ class WendlandC2Kernel:
         -----------
         distances : np.ndarray
             Array of distances [m], shape (N,)
-        h : float
-            Smoothing length [m]
+        h : float | np.ndarray
+            Smoothing length [m]: one for every distance, or one each
 
         Returns:
         --------
@@ -552,7 +555,8 @@ class WendlandC2Kernel:
 
         '''
         q = distances / h
-        sigma = self._normalization(h)
+        # One h for every pair, or each pair's own
+        sigma = np.broadcast_to(self._normalization(h), q.shape)
 
         result = np.zeros_like(q)
 
@@ -560,11 +564,11 @@ class WendlandC2Kernel:
         active = q < 2.0
         qActive = q[active]
         oneMinusHalfQ = 1.0 - 0.5 * qActive
-        result[active] = sigma * (oneMinusHalfQ ** 4) * (2.0 * qActive + 1.0)
+        result[active] = sigma[active] * (oneMinusHalfQ ** 4) * (2.0 * qActive + 1.0)
 
         return result
 
-    def gradientMagnitudeBatch(self, distances: np.ndarray, h: float) -> np.ndarray:
+    def gradientMagnitudeBatch(self, distances: np.ndarray, h: float | np.ndarray) -> np.ndarray:
 
         '''
 
@@ -576,8 +580,8 @@ class WendlandC2Kernel:
         -----------
         distances : np.ndarray
             Array of distances [m], shape (N,)
-        h : float
-            Smoothing length [m]
+        h : float | np.ndarray
+            Smoothing length [m]: one for every distance, or one each
 
         Returns:
         --------
@@ -585,7 +589,9 @@ class WendlandC2Kernel:
 
         '''
         q = distances / h
-        sigma = self._normalization(h)
+        # One h for every pair, or each pair's own
+        sigma = np.broadcast_to(self._normalization(h), q.shape)
+        lengths = np.broadcast_to(h, q.shape)
 
         result = np.zeros_like(q)
 
@@ -593,13 +599,13 @@ class WendlandC2Kernel:
         active = (q > 1e-12) & (q < 2.0)
         qActive = q[active]
         oneMinusHalfQ = 1.0 - 0.5 * qActive
-        dwdq = -5.0 * sigma * qActive * (oneMinusHalfQ ** 3)
-        result[active] = dwdq / h
+        dwdq = -5.0 * sigma[active] * qActive * (oneMinusHalfQ ** 3)
+        result[active] = dwdq / lengths[active]
 
         return result
 
     def gradientBatch(
-        self, drVecs: np.ndarray, distances: np.ndarray, h: float
+        self, drVecs: np.ndarray, distances: np.ndarray, h: float | np.ndarray
     ) -> np.ndarray:
 
         '''
@@ -616,8 +622,8 @@ class WendlandC2Kernel:
             Displacement vectors r_i - r_j, shape (N, dim)
         distances : np.ndarray
             Distances |dr|, shape (N,)
-        h : float
-            Smoothing length [m]
+        h : float | np.ndarray
+            Smoothing length [m]: one for every distance, or one each
 
         Returns:
         --------

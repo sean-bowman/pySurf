@@ -7,8 +7,11 @@ Checks of pysurf.waveBreaking on constructed particle arrangements whose answer 
 construction: a face sloping back has negative lean, a vertical face none, an overhanging lip a
 lean equal to its overhang; still water ahead of the wave, a face running past the search window and
 particle rows lifted under the crest do not count as lean; the tracker records breaking only once
-the lean persists; and the surface profile and waterline match the arrangement they were built
-from.
+the lean persists; the surface profile and waterline match the arrangement they were built
+from; and the smoothed fluid-fraction surface stands at the top of the water's cells and sorts its
+closed contours into pockets of air and drops of water; the face read from that surface is
+level, vertical or overhanging as built, in deep or shallow water, whatever voids lie under the
+crest; and the jet's touchdown is the tube closing under a lip, not a void opening in the crest.
 
 Sean Bowman [10/11/2026]
 
@@ -19,8 +22,10 @@ import pytest
 
 from pysurf.bathymetry import Bathymetry
 from pysurf.sphParticles import ParticleSystem, fillRegion, latticePoints
-from pysurf.waveBreaking import (BreakingDetector, BreakingTracker, SurfaceBreakingTracker, freeSurfaceProfile,
-                                 frontFaceLean, profileCrest, waterlineX, waveFront)
+from pysurf.sphRefinement import splitParticles
+from pysurf.waveBreaking import (BreakingDetector, BreakingPoint, BreakingTracker, ParticleSurface, SurfaceBreakingTracker,
+                                 airShare, contourFace, freeSurfaceProfile, frontFaceLean, particleSurface, profileCrest,
+                                 waterlineX, waveFront)
 
 s = 0.05            # [m] particle spacing
 swl = 1.0           # [m] still water level
@@ -243,3 +248,146 @@ def testARippleOnTheFaceDoesNotEndTheFront():
 
     assert x[front.troughIndex] == pytest.approx(5.99, abs = 0.011)
     assert surface[front.troughIndex] == pytest.approx(1.0, abs = 0.008)
+
+def testTheParticleSurfaceSortsTheSurfacePocketsAndDrops():
+
+    '''A block of water with a hole in it and a drop above it, cut by a window whose lower edge lies in the water.'''
+
+    water = column(0.0, 1.0, 0.0, 0.5)
+    # The hole empties the cells of 0.3 < x < 0.7 and 0.15 < z < 0.35; the drop fills 0.4 < x < 0.55, 0.7 < z < 0.85
+    hole = (np.abs(water[:, 0] - 0.5) < 0.2 - 1e-9) & (np.abs(water[:, 1] - 0.25) < 0.1 - 1e-9)
+    drop = column(0.4, 0.55, 0.7, 0.85)
+    result = particleSurface(np.vstack([water[~hole], drop]), s, np.array([-0.2, 0.1]), np.array([1.2, 1.0]))
+
+    # The surface runs up the left side, across the top and down the right, starting at its left end
+    assert result.surface[0, 0] < result.surface[-1, 0]
+    top = result.surface[np.abs(result.surface[:, 0] - 0.5) < 0.3]
+    assert np.allclose(top[:, 1], 0.5, atol = 0.05 * s)
+    # Each contour stands on the edges of the cells; it rounds their corners
+    assert len(result.pockets) == 1 and len(result.drops) == 1
+    pocket, droplet = result.pockets[0], result.drops[0]
+    assert np.allclose([pocket[:, 0].min(), pocket[:, 0].max(), pocket[:, 1].min(), pocket[:, 1].max()],
+                       [0.3, 0.7, 0.15, 0.35], atol = 0.05 * s)
+    assert ParticleSurface.area(pocket) == pytest.approx(0.4 * 0.2, rel = 0.1)
+    assert ParticleSurface.area(droplet) == pytest.approx(0.15 * 0.15, rel = 0.25)
+
+flatBed = Bathymetry([-3.0, 4.0], [0.0, 0.0], stillWaterLevel = swl)
+
+@pytest.mark.parametrize('face, slope', [(lambda z: 1.0 - 0.5 * (z - swl), 0.5 / np.sqrt(1.25)),
+                                         (lambda z: np.full_like(z, 1.0), 0.0),
+                                         (lambda z: np.where(z < swl + 0.2, 1.0, 1.3), -1.0)])
+def testTheContourFaceReadsTheSlopeOfTheFace(face, slope):
+
+    '''A face sloping back at dx/dz = -0.5, a vertical face, and a lip: dx/ds 0.447, 0 and -1.'''
+
+    result = contourFace(crestWithFace(face), s, 0.5, flatBed, reach = 1.0, windowDepth = 0.1)
+
+    assert result.crestHeight == pytest.approx(0.4, abs = 0.05 * s)
+    assert result.slope == pytest.approx(slope, abs = 0.02)
+    # The face built at x = 1 - 0.5 (z - SWL), 1 and 1 to 1.3 for the lip, between z = SWL and SWL + 0.4
+    assert 0.75 < result.faceX < 1.35
+
+def testTheContourFaceReadsAFaceInShallowWater():
+
+    '''
+
+    A vertical face over water 0.3 deep, less than the window depth of 0.2 and three spacings: the
+    window's lower edge rises to 0.075 below still water, and the face reads vertical.
+
+    '''
+
+    shallowBed = Bathymetry([-3.0, 4.0], [0.7, 0.7], stillWaterLevel = swl)
+    water = column(-1.0, 3.0, 0.7, swl)
+    crest = fillRegion(lambda p: (p[:, 0] > 0.0) & (p[:, 0] < 1.0), [-1.0, swl], [3.0, swl + 0.4], s)
+    result = contourFace(np.vstack([water, crest]), s, 0.5, shallowBed, reach = 1.0, windowDepth = 0.2)
+
+    assert result.window is not None
+    assert result.crestHeight == pytest.approx(0.4, abs = 0.05 * s)
+    assert result.slope == pytest.approx(0.0, abs = 0.02)
+    # Water 0.24 deep leaves a window 0.045 deep, less than a spacing: there is none
+    assert contourFace(np.vstack([water, crest]), s, 0.5, Bathymetry([-3.0, 4.0], [0.76, 0.76], stillWaterLevel = swl),
+                       reach = 1.0, windowDepth = 0.2).window is None
+
+def testAVoidUnderTheCrestIsNotAFace():
+
+    '''
+
+    Two rows emptied under a crest whose face slopes back, as the tensile voids of a scheme without
+    shifting open there: the band inside the void ends its run at the void and reads as lean, while
+    the smoothed surface keeps the void as a pocket apart from the surface.
+
+    '''
+
+    positions = crestWithFace(lambda z: 1.0 - 0.5 * (z - swl))
+    void = (positions[:, 1] > swl + 0.1) & (positions[:, 1] < swl + 0.2) & (positions[:, 0] > 0.1) & (positions[:, 0] < 0.6)
+    positions = positions[~void]
+
+    assert frontFaceLean(positions, 0.0, swl, s, reach = 1.0) > 10.0 * s
+    assert contourFace(positions, s, 0.5, flatBed, reach = 1.0, windowDepth = 0.1).slope == pytest.approx(0.447, abs = 0.02)
+    assert len(particleSurface(positions, s, np.array([-0.5, 0.9]), np.array([2.0, 2.0])).pockets) == 1
+
+def testTheTrackerRecordsTouchdownWhenTheTubeCloses():
+
+    '''
+
+    After breaking, a lip over open air is not a touchdown; the same lip with its tip joined to the
+    water below closes a 0.25 by 0.2 pocket, and the tracker keeps the open surface before it.
+
+    '''
+
+    lip = crestWithFace(lambda z: np.where(z < swl + 0.2, 1.0, 1.3))
+    tip = column(1.25, 1.3, swl, swl + 0.2)
+    tracker = BreakingTracker(flatBed, s, faceReach = 1.0, faceMeasure = 'contour')
+    tracker.breakingPoint = BreakingPoint(time = 0.0, lean = float('nan'), crestX = 0.5, crestHeight = 0.4, depth = 1.0)
+
+    tracker.update(1.0, lip)
+    assert tracker.touchdownSurface is None
+    tracker.update(2.0, np.vstack([lip, tip]))
+
+    assert tracker.touchdownTime == pytest.approx(1.5)
+    # The kept surface overhangs: x runs back along the lip's underside
+    assert np.any(np.diff(tracker.touchdownSurface[:, 0]) < -0.5 * s)
+    assert ParticleSurface.area(tracker.touchdownPocket) == pytest.approx(0.25 * 0.2, rel = 0.15)
+
+def testAVoidInTheWaterIsNotATouchdown():
+
+    '''
+
+    After breaking, a 0.4 by 0.1 void opening inside the crest of the lip is water the last surface
+    held, so it is not a touchdown; the tube closing later is, and the tracker keeps the tube, not
+    the void, as the pocket.
+
+    '''
+
+    lip = crestWithFace(lambda z: np.where(z < swl + 0.2, 1.0, 1.3))
+    inVoid = (lip[:, 0] > 0.1) & (lip[:, 0] < 0.5) & (lip[:, 1] > swl + 0.25) & (lip[:, 1] < swl + 0.35)
+    voided = lip[~inVoid]
+    tip = column(1.25, 1.3, swl, swl + 0.2)
+    tracker = BreakingTracker(flatBed, s, faceReach = 1.0, faceMeasure = 'contour')
+    tracker.breakingPoint = BreakingPoint(time = 0.0, lean = float('nan'), crestX = 0.5, crestHeight = 0.4, depth = 1.0)
+
+    tracker.update(1.0, lip)
+    tracker.update(2.0, voided)
+    assert tracker.touchdownSurface is None
+    window = particleSurface(voided, s, np.array([-0.5, 0.9]), np.array([2.0, 2.0]))
+    assert len(window.pockets) == 1 and airShare(window.pockets[0], tracker._lastSurface, s) == 0.0
+
+    tracker.update(3.0, np.vstack([voided, tip]))
+    assert tracker.touchdownTime == pytest.approx(2.5)
+    # The tube lies between the face at x = 1 and the tip at 1.25
+    assert 1.0 < tracker.touchdownPocket[:, 0].mean() < 1.25
+
+def testSplitParticlesCountTheirOwnAreaInTheSurface():
+
+    # A still block 0.5 m deep with its right half split: weighted by area the surface stays at the
+    # top of the water; counted as whole cells the split half reads four times as full and rises
+    s = 0.02
+    particles = ParticleSystem.assemble(latticePoints(np.zeros(2), np.array([1.0, 0.5]), s), np.empty((0, 2)), s, 1000.0)
+    splitParticles(particles, particles.positions[:, 0] > 0.5, 1000.0, 1.3 * s)
+    lower, upper = np.array([0.1, 0.3]), np.array([0.9, 0.7])
+    weighted = particleSurface(particles.positions, s, lower, upper, volumes = particles.masses / 1000.0).surface
+    counted = particleSurface(particles.positions, s, lower, upper).surface
+
+    assert np.abs(weighted[:, 1] - 0.5).max() < 0.1 * s
+    assert counted[counted[:, 0] > 0.6, 1].min() > 0.5 + 0.5 * s
+

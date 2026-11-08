@@ -371,6 +371,10 @@ class ExactSolitaryWave:
         Surface elevation at x, over d [-]
     potential : np.ndarray
         Velocity potential along the surface at x, over d sqrt(g d) [-], zero at the crest
+    alpha : np.ndarray | None
+        The conformal coordinate of each surface point, over d [-]: the map from the strip
+        -d <= beta <= 0 to the water takes alpha + 0i to (x, eta); evenly spaced on a periodic
+        interval, the crest at alpha = 0
 
     '''
 
@@ -379,6 +383,7 @@ class ExactSolitaryWave:
     x: np.ndarray
     eta: np.ndarray
     potential: np.ndarray
+    alpha: np.ndarray | None = None
 
 def babenkoSolitaryWave(froudeNumber: float, nodes: int = 8192, tolerance: float = 1e-13,
                         maxIterations: int = 5000) -> ExactSolitaryWave:
@@ -455,7 +460,7 @@ def babenkoSolitaryWave(froudeNumber: float, nodes: int = 8192, tolerance: float
     shift -= shift[crest]
 
     return ExactSolitaryWave(froudeNumber = froudeNumber, amplitude = float(eta[crest]), x = alpha + shift,
-                             eta = eta, potential = froudeNumber * shift)
+                             eta = eta, potential = froudeNumber * shift, alpha = alpha)
 
 @functools.lru_cache(maxsize = 32)
 def exactSolitaryWave(heightRatio: float, nodes: int = 8192) -> ExactSolitaryWave:
@@ -525,6 +530,124 @@ def exactSolitarySurface(x: np.ndarray, height: float, depth: float, crestX: flo
     potential = CubicSpline(wave.x, wave.potential)(xi) * depth * math.sqrt(gravity * depth)
 
     return eta, potential - potential[0]
+
+@functools.lru_cache(maxsize = 8)
+def exactSolitaryInterior(heightRatio: float, levels: int = 129) -> tuple[np.ndarray, ...]:
+
+    '''
+
+    The water under the exact solitary wave on `levels` conformal levels, from the bed to the
+    surface, in units of d and sqrt(g d), the crest at x = 0 and still water at y = 0.
+
+    The map from the strip -1 <= beta <= 0 to the water is z = zeta + f(zeta), f = X + iY analytic,
+    with Y = 0 on the bed and Y = eta on the surface. Each Fourier mode of eta carries into the strip
+    as Y_k = eta_k sinh(k (beta + 1)) / sinh(k) and X_k = -i eta_k cosh(k (beta + 1)) / sinh(k),
+    and the mean of eta as the linear part eta_0 (zeta + i); on the surface X is the shift
+    `babenkoSolitaryWave` computes. In the frame moving with the wave the flow is the uniform stream
+    w = -F zeta of the strip, so in the frame where the far water is at rest
+    u - iv = F (1 - 1 / z'(zeta)).
+
+    Parameters:
+    -----------
+    heightRatio : float
+        H / d
+    levels : int
+        Conformal levels from the bed (beta = -1) to the surface (beta = 0)
+
+    Returns:
+    --------
+    tuple : x, y, u and v, each shaped (levels, nodes), increasing in x along every level and in y
+        from level to level
+
+    '''
+
+    wave = exactSolitaryWave(heightRatio)
+    alpha, F = wave.alpha, wave.froudeNumber
+    nodes = len(alpha)
+    k = 2.0 * math.pi * np.fft.fftfreq(nodes, d = alpha[1] - alpha[0])
+    nonzero = k != 0.0
+    spectrum = np.fft.fft(wave.eta)
+    mean = float(np.mean(wave.eta))
+    crest = nodes // 2
+
+    def mapped(beta: float) -> tuple[np.ndarray, ...]:
+        '''X, Y and their alpha derivatives on one level.'''
+        surfaceX, surfaceY = np.zeros(nodes, dtype = complex), np.zeros(nodes, dtype = complex)
+        surfaceX[nonzero] = -1j * spectrum[nonzero] * np.cosh(k[nonzero] * (beta + 1.0)) / np.sinh(k[nonzero])
+        surfaceY[nonzero] = spectrum[nonzero] * np.sinh(k[nonzero] * (beta + 1.0)) / np.sinh(k[nonzero])
+        X = np.fft.ifft(surfaceX).real + mean * alpha
+        Y = np.fft.ifft(surfaceY).real + mean * (beta + 1.0)
+        slopeX = np.fft.ifft(1j * k * surfaceX).real + mean
+        slopeY = np.fft.ifft(1j * k * surfaceY).real
+        return X, Y, slopeX, slopeY
+
+    # The constant of X that puts the crest at x = 0, as on the surface
+    offset = mapped(0.0)[0][crest]
+    x, y, u, v = (np.empty((levels, nodes)) for _ in range(4))
+    for level, beta in enumerate(np.linspace(-1.0, 0.0, levels)):
+        X, Y, slopeX, slopeY = mapped(beta)
+        velocity = F * (1.0 - 1.0 / ((1.0 + slopeX) + 1j * slopeY))
+        x[level], y[level] = alpha + X - offset, beta + Y
+        u[level], v[level] = velocity.real, -velocity.imag
+
+    return x, y, u, v
+
+def exactSolitaryFlow(points: np.ndarray, height: float, depth: float, crestX: float = 0.0,
+                      stillWaterLevel: float = 0.0,
+                      gravity: float = constants.gravity) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+
+    '''
+
+    The velocity and pressure in the water under the exact potential flow solitary wave over a flat
+    bed, at any points, with the water far from the crest at rest.
+
+    The flow comes from the conformal map of `exactSolitaryInterior`, interpolated along each level
+    in x and between levels in elevation. The wave keeps its form, so phi_t = -c u, and unsteady
+    Bernoulli gives the pressure: p / rho = c u - |u|^2 / 2 - g (y - still water level). A point
+    above the surface takes the surface velocity; a point beyond the wave's interval, where its
+    elevation is below 1e-17 d, is in still water.
+
+    Parameters:
+    -----------
+    points : np.ndarray
+        Positions, shape (N, 2) [m]
+    height, depth : float
+        Wave height H and still water depth d [m]
+    crestX : float
+        Crest position [m]
+    stillWaterLevel : float
+        Elevation of still water [m]; the bed is depth below it
+
+    Returns:
+    --------
+    tuple : velocities, shape (N, 2) [m/s], p / rho, shape (N,) [m^2/s^2], and the surface elevation
+        above still water at each point's x, shape (N,) [m]
+
+    '''
+
+    x, y, u, v = exactSolitaryInterior(round(height / depth, 15))
+    levels = x.shape[0]
+    points = np.asarray(points, dtype = float)
+    xq = (points[:, 0] - crestX) / depth
+    yq = (points[:, 1] - stillWaterLevel) / depth
+    alongX = [np.vstack([np.interp(xq, x[level], field[level]) for level in range(levels)]) for field in (y, u, v)]
+    levelY, levelU, levelV = alongX
+
+    # The pair of levels each point lies between
+    below = np.clip(np.sum(levelY <= yq, axis = 0) - 1, 0, levels - 2)[None, :]
+    lowerY, upperY = np.take_along_axis(levelY, below, 0)[0], np.take_along_axis(levelY, below + 1, 0)[0]
+    share = np.clip((yq - lowerY) / (upperY - lowerY), 0.0, 1.0)
+    uq = (1.0 - share) * np.take_along_axis(levelU, below, 0)[0] + share * np.take_along_axis(levelU, below + 1, 0)[0]
+    vq = (1.0 - share) * np.take_along_axis(levelV, below, 0)[0] + share * np.take_along_axis(levelV, below + 1, 0)[0]
+    surface = levelY[-1].copy()
+    still = (xq <= x[:, 0].max()) | (xq >= x[:, -1].min())
+    uq[still], vq[still], surface[still] = 0.0, 0.0, 0.0
+
+    froude = exactSolitaryWave(round(height / depth, 15)).froudeNumber
+    speedScale = math.sqrt(gravity * depth)
+    kinematicPressure = (froude * uq - 0.5 * (uq**2 + vq**2) - yq) * gravity * depth
+
+    return np.column_stack([uq, vq]) * speedScale, kinematicPressure, surface * depth
 
 def serreAngularFrequency(wavenumber: ArrayLike, depth: float, gravity: float = constants.gravity,
                           alpha: float = 1.0) -> np.ndarray:
