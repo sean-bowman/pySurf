@@ -596,8 +596,10 @@ class BreakingWave:
         progress : bool
             Print a line roughly every tenth of the run
         stopAt : str
-            'end', 'breaking' to stop once the tracker has recorded the breaking point, or
-            'touchdown' to stop once it has recorded the jet's touchdown (the 'deltaSph' scheme)
+            'end', 'breaking' to stop once the tracker's breaking point is final
+            (`BreakingTracker.breakingFinal`), or 'touchdown' to stop once it has recorded the
+            jet's touchdown (the 'deltaSph' scheme). The 'deltaSph' scheme reads the smoothed
+            surface, where the touchdown fixes the breaking point, so there the two stop together
 
         Raises:
         -------
@@ -628,7 +630,7 @@ class BreakingWave:
         stepLimit = max(1000, int(100.0 * min(trackStep, self.frameInterval) * solver.speedOfSound
                                   / (config.cflNumber * config.smoothingLength)))
 
-        while solver.time < stopTime and not ((stopAt == 'breaking' and tracker.breakingPoint is not None)
+        while solver.time < stopTime and not ((stopAt == 'breaking' and tracker.breakingFinal)
                                               or (stopAt == 'touchdown' and tracker.touchdownSurface is not None)):
             target = min(nextTrack, nextFrame, stopTime)
             state = solver.advance(target, maxSteps = stepLimit)
@@ -653,7 +655,9 @@ class BreakingWave:
                 nextFrame += self.frameInterval
             if progress and solver.time >= nextReport:
                 elapsed = timeModule.perf_counter() - started
-                broken = 'breaking recorded' if tracker.breakingPoint else 'not broken'
+                # On the contour face measure the breaking point stays provisional until touchdown
+                broken = ('breaking recorded' if tracker.breakingFinal
+                          else 'breaking provisional' if tracker.breakingPoint else 'not broken')
                 print(f'  t = {solver.time:6.2f} s  step {state.step:7d}  dt {state.dt:.2e} s  '
                       f'wall {elapsed:7.1f} s  crest {tracker.crestHeight[-1] if tracker.crestHeight else 0.0:.3f} m  '
                       f'{broken}')

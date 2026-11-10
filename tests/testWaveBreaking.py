@@ -11,7 +11,9 @@ the lean persists; the surface profile and waterline match the arrangement they 
 from; and the smoothed fluid-fraction surface stands at the top of the water's cells and sorts its
 closed contours into pockets of air and drops of water; the face read from that surface is
 level, vertical or overhanging as built, in deep or shallow water, whatever voids lie under the
-crest; and the jet's touchdown is the tube closing under a lip, not a void opening in the crest.
+crest; the jet's touchdown is the tube closing under a lip, not a void opening in the crest nor a
+pocket under a face that has sloped back; and the breaking point read from that surface is the start
+of the face's last vertical run before touchdown, or of its longest without one.
 
 Sean Bowman [10/11/2026]
 
@@ -23,7 +25,7 @@ import pytest
 from pysurf.bathymetry import Bathymetry
 from pysurf.sphParticles import ParticleSystem, fillRegion, latticePoints
 from pysurf.sphRefinement import splitParticles
-from pysurf.waveBreaking import (BreakingDetector, BreakingPoint, BreakingTracker, ParticleSurface, SurfaceBreakingTracker,
+from pysurf.waveBreaking import (BreakingDetector, BreakingTracker, ParticleSurface, SurfaceBreakingTracker,
                                  airShare, contourFace, freeSurfaceProfile, frontFaceLean, particleSurface, profileCrest,
                                  waterlineX, waveFront)
 
@@ -330,15 +332,14 @@ def testTheTrackerRecordsTouchdownWhenTheTubeCloses():
 
     '''
 
-    After breaking, a lip over open air is not a touchdown; the same lip with its tip joined to the
-    water below closes a 0.25 by 0.2 pocket, and the tracker keeps the open surface before it.
+    A lip over open air is not a touchdown; the same lip with its tip joined to the water below
+    closes a 0.25 by 0.2 pocket, and the tracker keeps the open surface before it.
 
     '''
 
     lip = crestWithFace(lambda z: np.where(z < swl + 0.2, 1.0, 1.3))
     tip = column(1.25, 1.3, swl, swl + 0.2)
     tracker = BreakingTracker(flatBed, s, faceReach = 1.0, faceMeasure = 'contour')
-    tracker.breakingPoint = BreakingPoint(time = 0.0, lean = float('nan'), crestX = 0.5, crestHeight = 0.4, depth = 1.0)
 
     tracker.update(1.0, lip)
     assert tracker.touchdownSurface is None
@@ -353,9 +354,9 @@ def testAVoidInTheWaterIsNotATouchdown():
 
     '''
 
-    After breaking, a 0.4 by 0.1 void opening inside the crest of the lip is water the last surface
-    held, so it is not a touchdown; the tube closing later is, and the tracker keeps the tube, not
-    the void, as the pocket.
+    A 0.4 by 0.1 void opening inside the crest of the lip is water the last surface held, so it is
+    not a touchdown; the tube closing later is, and the tracker keeps the tube, not the void, as the
+    pocket.
 
     '''
 
@@ -364,7 +365,6 @@ def testAVoidInTheWaterIsNotATouchdown():
     voided = lip[~inVoid]
     tip = column(1.25, 1.3, swl, swl + 0.2)
     tracker = BreakingTracker(flatBed, s, faceReach = 1.0, faceMeasure = 'contour')
-    tracker.breakingPoint = BreakingPoint(time = 0.0, lean = float('nan'), crestX = 0.5, crestHeight = 0.4, depth = 1.0)
 
     tracker.update(1.0, lip)
     tracker.update(2.0, voided)
@@ -376,6 +376,68 @@ def testAVoidInTheWaterIsNotATouchdown():
     assert tracker.touchdownTime == pytest.approx(2.5)
     # The tube lies between the face at x = 1 and the tip at 1.25
     assert 1.0 < tracker.touchdownPocket[:, 0].mean() < 1.25
+
+def testTheBreakingPointIsTheLastVerticalRunBeforeTouchdown():
+
+    '''
+
+    On the smoothed surface, the tube closing under the lip fixes the breaking point at the start of
+    the vertical run in progress, though an earlier run that sloped back lasted longer; a face
+    sloping back and standing again afterwards does not move it.
+
+    '''
+
+    sloping = crestWithFace(lambda z: 1.0 - 0.5 * (z - swl))
+    lip = crestWithFace(lambda z: np.where(z < swl + 0.2, 1.0, 1.3))
+    tip = column(1.25, 1.3, swl, swl + 0.2)
+    tracker = BreakingTracker(flatBed, s, faceReach = 1.0, faceMeasure = 'contour')
+
+    tracker.update(0.0, sloping)
+    assert tracker.breakingPoint is None
+    for time in (1.0, 2.0, 3.0):
+        tracker.update(time, lip)
+    tracker.update(4.0, sloping)
+    tracker.update(5.0, lip)
+    assert tracker.breakingPoint.time == 1.0 and not tracker.breakingFinal
+    tracker.update(6.0, np.vstack([lip, tip]))
+    tracker.update(7.0, sloping)
+    tracker.update(8.0, lip)
+
+    assert tracker.breakingFinal and tracker.touchdownTime == pytest.approx(5.5)
+    assert tracker.breakingPoint.time == 5.0
+
+def testWithoutTouchdownTheBreakingPointIsTheLongestVerticalRun():
+
+    '''
+
+    With no tube closing, the breaking point is the start of the longest vertical run, not the
+    runs before it or the one after it.
+
+    '''
+
+    sloping = crestWithFace(lambda z: 1.0 - 0.5 * (z - swl))
+    lip = crestWithFace(lambda z: np.where(z < swl + 0.2, 1.0, 1.3))
+    tracker = BreakingTracker(flatBed, s, faceReach = 1.0, faceMeasure = 'contour')
+
+    for time, face in enumerate([lip, sloping, lip, lip, lip, sloping, lip, sloping]):
+        tracker.update(float(time), face)
+
+    assert tracker.breakingPoint.time == 2.0 and not tracker.breakingFinal
+
+def testATubeUnderAFaceThatSlopedBackIsNotATouchdown():
+
+    '''A pocket closing over air, an update after the face read as sloping back, does not land a jet.'''
+
+    sloping = crestWithFace(lambda z: 1.0 - 0.5 * (z - swl))
+    lip = crestWithFace(lambda z: np.where(z < swl + 0.2, 1.0, 1.3))
+    tip = column(1.25, 1.3, swl, swl + 0.2)
+    tracker = BreakingTracker(flatBed, s, faceReach = 1.0, faceMeasure = 'contour')
+
+    tracker.update(0.0, lip)
+    tracker.update(1.0, sloping)
+    tracker.update(2.0, np.vstack([lip, tip]))
+
+    assert tracker.touchdownSurface is None and not tracker.breakingFinal
 
 def testSplitParticlesCountTheirOwnAreaInTheSurface():
 

@@ -46,10 +46,10 @@ water overlaps, half a spacing to each side: rows sit at arbitrary heights again
 row straddling a band edge would otherwise scatter between two bands and leave holes in both,
 ending a run inside the water.
 
-The tracker records breaking when the lean exceeds one particle spacing over several consecutive
-updates, which keeps particle jitter from triggering it. The breaking point it reports follows the
-vertical-face instant by the short time the lip takes to grow one spacing, a bias shoreward that
-shrinks with resolution.
+Reading the face in cells, the tracker records breaking when the lean exceeds one particle spacing
+over several consecutive updates, which keeps particle jitter from triggering it. The breaking point
+it reports follows the vertical-face instant by the short time the lip takes to grow one spacing, a
+bias shoreward that shrinks with resolution.
 
 The lean in cells fails where voids open in the water under a crest: a void a few spacings thick
 between particle rows empties whole bands of cells, which end their run at the void and read as
@@ -58,9 +58,19 @@ half on a grid of half a spacing; a contour that closes on itself is a pocket of
 water, and the longest one ending on the window's edges is the surface, so a void stays a pocket
 apart from it. `contourFace` reads the front face on that surface as `bemSolver` reads a boundary
 element surface: the least dx/ds along the front, zero where the face stands vertical. With
-`faceMeasure = 'contour'` the tracker records breaking where it first reaches zero, and the jet's
-touchdown where a pocket first closes over air the surface held an update earlier (`airShare`): the
-tube under the jet, not a void opening inside the water.
+`faceMeasure = 'contour'` the tracker records the jet's touchdown where a pocket first closes over
+air the surface held an update earlier (`airShare`), with the face vertical at that update: the tube
+under the jet, not a void opening inside the water. The breaking point is the start of the run of
+updates with the face vertical that the touchdown ends: the face's last vertical crossing before
+touchdown. A ragged surface can read as vertical for a few updates and then slope back, as a step
+one or two particle layers high near the crest does; the run that ends in the jet's landing is the
+face that overturned, and the rule needs no count of updates, which would depend on how often the
+tracker reads. Without a touchdown, as where the face can no longer be read in water too shallow
+for its window before the jet lands, the breaking point is the start of the longest vertical run:
+the overturn holds the face vertical for the jet's whole flight, while a ragged surface's runs
+before it and the flicker of the broken wave after it are short. Until touchdown the breaking point
+is the start of the longest run so far, the earlier of two equal ones. An update whose face cannot
+be read neither ends a run nor lengthens it.
 
 A particle stands for the cell of water around it, so the free surface sits half a spacing above
 the topmost particle centers; elevations reported here include that half spacing. With it, still
@@ -84,7 +94,10 @@ the search window and deeper rows rising into a band do not read as lean, and th
 waterline match the arrangement they were built from. The smoothed surface sorts a hole and a
 drop as built, reads faces sloping back, vertical and overhanging at their built slopes, in deep
 and in shallow water, keeps a void under a crest apart from the face, and records touchdown when a
-lip's tip meets the water but not when a void opens in the crest. The surface measures are tested
+lip's tip meets the water but not when a void opens in the crest or a pocket closes under a face
+that has sloped back. The tracker on that surface keeps the vertical run the touchdown ends, though
+an earlier one lasted longer, and the longest run when no tube closes. The surface measures are
+tested
 on constructed profiles: the crest of a sech^2 profile between grid points, the highest point of a
 bore, a front running from crest to trough, a ripple on the face that does not end it, and a
 breaking point recorded once. Breaking measured with them is
@@ -593,9 +606,10 @@ class BreakingPoint:
 
     '''
 
-    Where the wave breaks: its front face first leaning forward of vertical by a spacing, or first
-    standing vertical on the smoothed surface, at the first of the consecutive updates that
-    confirmed it.
+    Where the wave breaks: its front face first leaning forward of vertical by a spacing, at the
+    first of the consecutive updates that confirmed it; or, on the smoothed surface, the start of
+    the face's last vertical run before the jet's touchdown, or of its longest without one
+    (`BreakingTracker`).
 
     Parameters:
     -----------
@@ -652,11 +666,14 @@ class BreakingTracker:
         A crest offshore of this position cannot register as breaking, so the start-up of the
         simulation cannot either [m]
     persistence : int
-        Consecutive updates the lean must stay above its threshold to count as breaking
+        For 'cells', consecutive updates the lean must stay above its threshold to count as
+        breaking
     faceMeasure : str
         'cells', the lean of the face in cells one spacing square (`frontFaceLean`); or 'contour',
         the crest and the least dx/ds of the face from the smoothed surface (`contourFace`), with
-        breaking where the face first stands vertical, dx/ds <= 0. A void a few spacings thick
+        breaking at the start of the last run of updates with the face vertical, dx/ds <= 0, before
+        the jet's touchdown, or of the longest such run without one (see the module notes). A void
+        a few spacings thick
         that opens between particle rows under a crest empties whole bands of cells, which then
         end their run at the void and read as lean; the smoothed surface keeps such a void as a
         pocket apart from the surface.
@@ -665,10 +682,10 @@ class BreakingTracker:
         tenth of `faceReach`
     pocketArea : float
         For 'contour', the smallest pocket of air, in spacings squared, that marks the jet's
-        touchdown once the wave has broken: the tube closing under it. The pocket must lie mostly
-        where the surface of the update before had air (`airShare`), so a void opening inside the
-        water does not count. That surface, with the tube still open, is kept as
-        `touchdownSurface`, the state the boundary element model measures at touchdown
+        touchdown: the tube closing under it, with the face vertical at the update before. The
+        pocket must lie mostly where the surface of the update before had air (`airShare`), so a
+        void opening inside the water does not count. That surface, with the tube still open, is
+        kept as `touchdownSurface`, the state the boundary element model measures at touchdown
 
     '''
 
@@ -694,17 +711,45 @@ class BreakingTracker:
     touchdownPocket: np.ndarray | None = None
     _candidate: BreakingPoint | None = field(default = None, repr = False)
     _streak: int = field(default = 0, repr = False)
+    _vertical: bool = field(default = False, repr = False)
+    _runStart: BreakingPoint | None = field(default = None, repr = False)
+    _runLength: int = field(default = 0, repr = False)
+    _longestRun: int = field(default = 0, repr = False)
     _lastSurface: np.ndarray | None = field(default = None, repr = False)
     _lastTime: float = field(default = float('nan'), repr = False)
+
+    @property
+    def breakingFinal(self) -> bool:
+
+        '''
+
+        Whether the breaking point can no longer change: once recorded, reading the face in cells;
+        once the jet's touchdown fixes it, reading the smoothed surface.
+
+        '''
+
+        if self.faceMeasure == 'contour':
+            return self.touchdownSurface is not None
+        return self.breakingPoint is not None
+
+    def _point(self, time: float, lean: float, crestX: float, crestHeight: float, faceX: float) -> BreakingPoint:
+
+        '''The breaking point if the wave breaks at this update.'''
+
+        faceDepth = float(self.bathymetry.depth(faceX)) if np.isfinite(faceX) else float('nan')
+        return BreakingPoint(time = time, lean = lean, crestX = crestX, crestHeight = crestHeight,
+                             depth = float(self.bathymetry.depth(crestX)), faceX = faceX, faceDepth = faceDepth)
 
     def update(self, time: float, positions: np.ndarray, volumes: np.ndarray | None = None) -> None:
 
         '''
 
-        Record the crest, the face and the waterline at `time`, and the breaking point once the
-        face has leaned past its threshold ('cells') or stood vertical ('contour'), with the crest
-        past `searchFromX`, for `persistence` consecutive updates. With 'contour', once the wave
-        has broken, record the touchdown when a pocket of `pocketArea` first closes.
+        Record the crest, the face and the waterline at `time`, and the breaking point, with the
+        crest past `searchFromX`. Reading cells ('cells'), the breaking point is the first of
+        `persistence` consecutive updates with the face leaning past its threshold. Reading the
+        smoothed surface ('contour'), it is the start of the longest run of updates with the face
+        vertical, until a pocket of `pocketArea` closing under a vertical face records the
+        touchdown and fixes the breaking point at the start of the run in progress.
 
         Parameters:
         -----------
@@ -753,26 +798,37 @@ class BreakingTracker:
         self.faceSlope.append(slope)
         self.waterline.append(tip)
 
-        if self.breakingPoint is None:
-            if crestX >= self.searchFromX and steep:
-                if self._streak == 0:
-                    faceDepth = float(bathymetry.depth(faceX)) if np.isfinite(faceX) else float('nan')
-                    self._candidate = BreakingPoint(time = time, lean = lean, crestX = crestX, crestHeight = crestHeight,
-                                                    depth = float(bathymetry.depth(crestX)), faceX = faceX,
-                                                    faceDepth = faceDepth)
-                self._streak += 1
-                if self._streak >= self.persistence:
-                    self.breakingPoint = self._candidate
-            else:
-                self._streak, self._candidate = 0, None
-        elif window is not None and self.touchdownSurface is None and self._lastSurface is not None:
-            # The tube closes over air the last surface held; a void opens inside its water
-            tubes = [pocket for pocket in window.pockets if ParticleSurface.area(pocket) >= self.pocketArea * s**2
-                     and airShare(pocket, self._lastSurface, s) > 0.5]
-            if tubes:
-                self.touchdownTime = 0.5 * (self._lastTime + time)
-                self.touchdownSurface = self._lastSurface
-                self.touchdownPocket = max(tubes, key = ParticleSurface.area)
+        if self.faceMeasure != 'contour':
+            if self.breakingPoint is None:
+                if crestX >= self.searchFromX and steep:
+                    if self._streak == 0:
+                        self._candidate = self._point(time, lean, crestX, crestHeight, faceX)
+                    self._streak += 1
+                    if self._streak >= self.persistence:
+                        self.breakingPoint = self._candidate
+                else:
+                    self._streak, self._candidate = 0, None
+        elif self.touchdownSurface is None:
+            if self._vertical and window is not None and self._lastSurface is not None:
+                # The tube closes over air the last surface held, under a face that stood vertical;
+                # a void opens inside its water
+                tubes = [pocket for pocket in window.pockets if ParticleSurface.area(pocket) >= self.pocketArea * s**2
+                         and airShare(pocket, self._lastSurface, s) > 0.5]
+                if tubes:
+                    self.touchdownTime = 0.5 * (self._lastTime + time)
+                    self.touchdownSurface = self._lastSurface
+                    self.touchdownPocket = max(tubes, key = ParticleSurface.area)
+                    # The jet lands at the end of the run in progress: its start is the breaking point
+                    self.breakingPoint = self._runStart
+            if self.touchdownSurface is None and crestX >= self.searchFromX and np.isfinite(slope):
+                if steep:
+                    if not self._vertical:
+                        self._runStart, self._runLength = self._point(time, lean, crestX, crestHeight, faceX), 0
+                    self._runLength += 1
+                    # Until touchdown, the longest run so far; the earlier of two equal ones
+                    if self._runLength > self._longestRun:
+                        self._longestRun, self.breakingPoint = self._runLength, self._runStart
+                self._vertical = steep
         if window is not None and len(window.surface):
             self._lastSurface, self._lastTime = window.surface, time
 
