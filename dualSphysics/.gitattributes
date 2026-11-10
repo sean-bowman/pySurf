@@ -1,0 +1,3 @@
+# DualSPHysics and its tools run these scripts under Linux: keep Unix line endings
+* text=auto eol=lf
+*.png binary
