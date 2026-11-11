@@ -18,6 +18,8 @@ full at the wall.
                         piston; in 3D extruded across a channel, walled or periodic
     ShearedBedBoundary  a 3D bed whose depth contours run obliquely across the channel, each row of
                         particles with an offshore wall driven as a piston of its own
+    HeightFieldBoundary a 3D bed of any shape (`pysurf.bathymetry.HeightField`) in a rectangular
+                        tank with vertical walls on all four sides
 
 Each produces its particle positions and an `enforce` step the solver calls after every
 integration. Enforcement is the fallback, not the boundary condition: it catches the rare particle
@@ -38,7 +40,8 @@ Monaghan & Kos (1999) -- Solitary waves on a Cretan beach, J. Waterway, Port, Co
 Geometry and bookkeeping only; the physics of the wall is the solver's. tests/testSphBoundaries.py
 checks that boundary layers sit at the intended offsets from the wall, keep the lattice spacing
 along it, and that enforcement returns a penetrating particle to the water with no velocity into
-the wall. The wall's effect on a flow is validated through the sloshing tank in
+the wall; for the height-field bed, that each layer lies its offset below the bed along the
+normal and that the walls close the tank's corners. The wall's effect on a flow is validated through the sloshing tank in
 tests/testValidationSloshing.py.
 
 Sean Bowman [10/11/2026]
@@ -52,7 +55,7 @@ from __future__ import annotations
 import numpy as np
 
 # Local imports
-from pysurf.bathymetry import Bathymetry
+from pysurf.bathymetry import Bathymetry, HeightField
 from pysurf.sphParticles import ParticleSystem
 
 class ContainerBoundary:
@@ -491,3 +494,147 @@ class ShearedBedBoundary:
         members = fluid[beyond]
         positions[members, 0] = limit[beyond]
         velocities[members, 0] = np.minimum(velocities[members, 0], 0.0)
+
+class HeightFieldBoundary:
+
+    '''
+
+    A bed given as a height field, in a rectangular tank whose vertical walls stand on the field's
+    bounds: an offshore wall at x = startX, a shoreward wall at x = endX, and side walls at
+    y = startY and y = endY.
+
+    Bed particles sit on the lattice's columns, x = startX + (i + 1/2) s and y = startY + (j + 1/2) s,
+    in layers below the bed along its local normal at (layer + 1/2) s, as `BedBoundary` lays them
+    in 2D. Each wall's layers stand behind its plane at (layer + 1/2) s, on the fluid lattice's
+    heights (`latticeFloor` + (k + 1/2) s) from below the bed's deepest layer up to `wallTop`. The
+    side walls run past the end walls by their own thickness, so the corners are closed. With no
+    viscosity between fluid and boundary particles (the solver's default) every wall is free-slip,
+    so the wall at y = startY can stand for a plane of symmetry.
+
+    The columns are spaced s in x and y, so on a slope the layers' particles lie s / cos(slope)
+    apart along the bed: 0.2 percent on a 1:15 slope.
+
+    Parameters:
+    -----------
+    field : HeightField
+        The bed, with its still water level; its bounds are the tank's walls
+    spacing : float
+        Lattice spacing, matching the fluid's [m]
+    nLayers : int
+        Boundary particle layers
+    wallTop : float
+        Top of the walls [m]
+    offshoreWall : bool
+        A wall at x = startX
+    endWall : bool
+        A wall at x = endX; without it, fluid past endX returns to it
+
+    '''
+
+    def __init__(self, field: HeightField, spacing: float, nLayers: int = 3, wallTop: float = 1.0,
+                 offshoreWall: bool = True, endWall: bool = True) -> None:
+
+        self.field = field
+        self.spacing = spacing                  # [m]
+        self.nLayers = nLayers
+        self.wallTop = wallTop                  # [m]
+        self.offshoreWall = offshoreWall
+        self.endWall = endWall
+
+    @property
+    def latticeFloor(self) -> float:
+        '''The level the fluid lattice's heights are counted from: the bed's lowest point [m].'''
+        return self.field.lowestElevation()
+
+    def columns(self) -> tuple[np.ndarray, np.ndarray]:
+
+        '''The lattice's column positions along x and along y inside the walls [m].'''
+
+        s = self.spacing
+        startX, endX, startY, endY = self.field.bounds
+
+        return np.arange(startX + 0.5 * s, endX, s), np.arange(startY + 0.5 * s, endY, s)
+
+    def positions(self) -> np.ndarray:
+
+        '''Boundary particle positions, shape (N, 3): the bed's layers, then the walls.'''
+
+        s, layers, field = self.spacing, self.nLayers, self.field
+        startX, endX, startY, endY = field.bounds
+        xs, ys = self.columns()
+
+        # The bed's layers, each offset along the local normal
+        gridX, gridY = np.meshgrid(xs, ys, indexing = 'xy')
+        gridX, gridY = gridX.ravel(), gridY.ravel()
+        surface = np.column_stack([gridX, gridY, field.elevation(gridX, gridY)])
+        normal = field.normal(gridX, gridY)
+        blocks = [surface - (layer + 0.5) * s * normal for layer in range(layers)]
+
+        # A wall's columns run on the lattice's heights from below the bed's deepest layer at the
+        # wall's foot to the top
+        heights = np.arange(self.latticeFloor - (layers + 1) * s + 0.5 * s, self.wallTop, s)
+
+        def wall(lineX: np.ndarray, lineY: np.ndarray) -> np.ndarray:
+            bottom = field.elevation(np.clip(lineX, startX, endX), np.clip(lineY, startY, endY)) - layers * s
+            x, y = np.repeat(lineX, heights.size), np.repeat(lineY, heights.size)
+            z = np.tile(heights, lineX.size)
+            keep = z > np.repeat(bottom, heights.size)
+            return np.column_stack([x[keep], y[keep], z[keep]])
+
+        offsets = (np.arange(layers) + 0.5) * s
+        for offset in offsets:
+            if self.offshoreWall:
+                blocks.append(wall(np.full(ys.size, startX - offset), ys))
+            if self.endWall:
+                blocks.append(wall(np.full(ys.size, endX + offset), ys))
+        alongAll = np.concatenate([startX - offsets[::-1], xs, endX + offsets])
+        for offset in offsets:
+            blocks.append(wall(alongAll, np.full(alongAll.size, startY - offset)))
+            blocks.append(wall(alongAll, np.full(alongAll.size, endY + offset)))
+
+        return np.vstack(blocks)
+
+    def enforce(self, particles: ParticleSystem) -> None:
+
+        '''
+
+        Return fluid that has crossed the bed or a wall to the water side, a quarter spacing clear
+        of it, and remove its velocity into the solid. Below the bed a particle rises vertically,
+        and loses its velocity into the bed along the bed's normal there.
+
+        '''
+
+        fluid = np.nonzero(particles.isFluid)[0]
+        positions, velocities = particles.positions, particles.velocities
+        clearance = 0.25 * self.spacing
+        field = self.field
+        startX, endX, startY, endY = field.bounds
+
+        # Bed
+        bed = field.elevation(positions[fluid, 0], positions[fluid, 1])
+        below = positions[fluid, 2] < bed + clearance
+        under = fluid[below]
+        if under.size:
+            positions[under, 2] = bed[below] + clearance
+            normal = field.normal(positions[under, 0], positions[under, 1])
+            inward = np.sum(velocities[under] * normal, axis = 1)
+            into = inward < 0.0
+            velocities[under[into]] -= inward[into, None] * normal[into]
+
+        # Side walls
+        low = fluid[positions[fluid, 1] < startY + clearance]
+        positions[low, 1] = startY + clearance
+        velocities[low, 1] = np.maximum(velocities[low, 1], 0.0)
+        high = fluid[positions[fluid, 1] > endY - clearance]
+        positions[high, 1] = endY - clearance
+        velocities[high, 1] = np.minimum(velocities[high, 1], 0.0)
+
+        # Offshore and shoreward walls
+        if self.offshoreWall:
+            behind = fluid[positions[fluid, 0] < startX + clearance]
+            positions[behind, 0] = startX + clearance
+            velocities[behind, 0] = np.maximum(velocities[behind, 0], 0.0)
+        limit = endX - clearance if self.endWall else endX
+        beyond = fluid[positions[fluid, 0] > limit]
+        positions[beyond, 0] = limit
+        velocities[beyond, 0] = np.minimum(velocities[beyond, 0], 0.0)

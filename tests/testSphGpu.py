@@ -465,6 +465,38 @@ def testBedEnforcementMatchesTheHost(device, dimensions):
     assert resident.positions == pytest.approx(host.positions, abs = 1e-12)
     assert resident.velocities == pytest.approx(host.velocities, abs = 1e-12)
 
+@pytest.mark.parametrize('device', devices)
+def testHeightFieldEnforcementMatchesTheHost(device):
+
+    # Fluid scattered around a short ridge and past every wall, enforced by HeightFieldBoundary on
+    # the host and by the device kernel
+    from pysurf.bathymetry import HeightField
+    from pysurf.sphBoundaries import HeightFieldBoundary
+    from pysurf.sphParticles import ParticleSystem
+
+    rng = np.random.default_rng(11)
+    field = HeightField.ridge(0.5, endX = 8.0, halfWidth = 2.0, gridSpacing = 1.0 / 16.0)
+    s = 0.125
+    boundary = HeightFieldBoundary(field, s, nLayers = 3, wallTop = 1.5)
+    count = 6000
+    fluid = np.column_stack([rng.uniform(-0.2, 8.2, count), rng.uniform(-0.2, 2.2, count), rng.uniform(-0.1, 1.2, count)])
+    host = ParticleSystem.assemble(fluid, boundary.positions(), s, 1000.0, rng.normal(0.0, 1.0, (count, 3)))
+    resident = ParticleSystem(**{name: getattr(host, name).copy() for name in
+                                 ('positions', 'velocities', 'accelerations', 'densities', 'pressures', 'masses',
+                                  'isFluid')})
+    moved = host.positions.copy()
+    pairSums = sphGpu.PairSums(3, 3.0 * s, resident.positions.min(axis = 0), resident.positions.max(axis = 0),
+                               device = device)
+    pairSums.push(resident)
+    pairSums.setBoundary(boundary, resident)
+    pairSums.enforceBoundary()
+    pairSums.pull(resident)
+
+    boundary.enforce(host)
+    assert np.count_nonzero(np.any(host.positions != moved, axis = 1)) > 0.2 * count
+    assert resident.positions == pytest.approx(host.positions, abs = 1e-12)
+    assert resident.velocities == pytest.approx(host.velocities, abs = 1e-12)
+
 def testDeviceStepsFollowHostStepsOverABed():
 
     # A solitary wave in a short channel: 100 steps from the host and on the device

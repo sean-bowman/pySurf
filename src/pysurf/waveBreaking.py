@@ -673,10 +673,9 @@ class BreakingTracker:
         the crest and the least dx/ds of the face from the smoothed surface (`contourFace`), with
         breaking at the start of the last run of updates with the face vertical, dx/ds <= 0, before
         the jet's touchdown, or of the longest such run without one (see the module notes). A void
-        a few spacings thick
-        that opens between particle rows under a crest empties whole bands of cells, which then
-        end their run at the void and read as lean; the smoothed surface keeps such a void as a
-        pocket apart from the surface.
+        a few spacings thick that opens between particle rows under a crest empties whole bands of
+        cells, which then end their run at the void and read as lean; the smoothed surface keeps
+        such a void as a pocket apart from the surface.
     windowDepth : float | None
         For 'contour', how far below still water the window's lower edge lies [m]; None for a
         tenth of `faceReach`

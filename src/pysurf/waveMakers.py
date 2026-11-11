@@ -10,6 +10,9 @@ The ways a wave enters an SPH simulation.
                         generated wave has the requested height
     solitaryWaveFluid   an initial condition: fluid particles laid under a first-order solitary
                         wave already in motion, with the velocity field that carries it
+    exactSolitaryWaveFluid
+                        the same under the exact potential flow solitary wave, with its pressure;
+                        `exactSolitaryWaveFluid3D` lays it straight across a 3D bed
 
 A periodic wave train needs the piston and a long run-in for the generated waves to settle. A
 single solitary wave needs neither: it starts as a wave of permanent form, travels unchanged over
@@ -32,7 +35,8 @@ tests/testWaveMakers.py checks the piston stroke against the shallow and deep li
 displacement. It checks the solitary initial condition against its definition: the particles fill
 the profile to within the lattice spacing and carry the wave's volume, and the velocity field
 satisfies continuity, the bed condition and the kinematic free-surface condition. The wave it launches is validated against the solitary celerity in
-tests/testValidationSolitary.py.
+tests/testValidationSolitary.py. The 3D exact wave over a flat height field matches the 2D one's
+particles, velocities and pressures in every lattice row across the tank.
 
 Sean Bowman [10/11/2026]
 
@@ -49,8 +53,8 @@ import numpy as np
 
 # Local imports
 from pysurf import waveTheory
-from pysurf.bathymetry import Bathymetry
-from pysurf.sphParticles import ParticleSystem, fillRegion
+from pysurf.bathymetry import Bathymetry, HeightField
+from pysurf.sphParticles import ParticleSystem, fillRegion, latticePoints
 
 #----------------------------------------------------------------------#
 # -- Piston Wave Maker -- #
@@ -361,3 +365,103 @@ def exactSolitaryBoundaryPressure(bathymetry: Bathymetry, positions: np.ndarray,
     wet = reference[:, 1] < level + surface
 
     return np.where(wet, np.maximum(pressure, 0.0) + gravity * (reference[:, 1] - positions[:, 1]), 0.0)
+
+def exactFlowInChunks(points: np.ndarray, height: float, depth: float, crestX: float, stillWaterLevel: float,
+                      gravity: float = 9.80665, chunk: int = 50000) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+
+    '''
+
+    `waveTheory.exactSolitaryFlow` over many points, a chunk at a time: each call holds every level
+    of the wave's conformal map for every point it is given, about 3 kB a point.
+
+    '''
+
+    points = np.asarray(points, dtype = float)
+    velocities, pressures, surface = np.zeros((len(points), 2)), np.zeros(len(points)), np.zeros(len(points))
+    for start in range(0, len(points), chunk):
+        part = slice(start, start + chunk)
+        velocities[part], pressures[part], surface[part] = waveTheory.exactSolitaryFlow(
+            points[part], height, depth, crestX, stillWaterLevel, gravity)
+
+    return velocities, pressures, surface
+
+def exactSolitaryWaveFluid3D(field: HeightField, height: float, depth: float, crestX: float, spacing: float,
+                             floor: float | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+
+    '''
+
+    Fluid particles under the exact potential flow solitary wave, its crest straight along y, over
+    a 3D bed, with their velocities and pressures.
+
+    The wave is `exactSolitaryWaveFluid`'s, the flow of a flat bed `depth` deep, the same in every
+    vertical (x, z) plane. Lattice points inside the field's bounds are kept from half a spacing
+    above the bed up to the wave's surface; the spanwise velocity is zero. Where the bed rises
+    under the wave the flow does not meet the bed's slope, as in the boundary element model's
+    exact start, which takes the same flat-bed wave over a slope.
+
+    Parameters:
+    -----------
+    field : HeightField
+        The bed, with its still water level and bounds
+    height : float
+        Wave height above still water H [m]
+    depth : float
+        Still water depth of the flat-bed wave [m]
+    crestX : float
+        Crest position [m]
+    spacing : float
+        Lattice spacing [m]
+    floor : float | None
+        The level the lattice's heights are counted from [m]; None for the bed's lowest point
+
+    Returns:
+    --------
+    tuple : positions and velocities, each shaped (N, 3) [m, m/s], and pressures over density,
+        shape (N,) [m^2/s^2]
+
+    '''
+
+    s, level = spacing, field.stillWaterLevel
+    floor = field.lowestElevation() if floor is None else floor
+    startX, endX, startY, endY = field.bounds
+
+    # The flow on one (x, z) plane of the lattice, then that plane laid at every row across
+    plane = latticePoints([startX, floor], [endX, level + height + s], s)
+    velocities, pressures, surface = exactFlowInChunks(plane, height, depth, crestX, level)
+    wet = plane[:, 1] < level + surface
+    plane, velocities, pressures = plane[wet], velocities[wet], np.maximum(pressures[wet], 0.0)
+    rows = np.arange(startY + 0.5 * s, endY, s)
+
+    x, z = np.tile(plane[:, 0], rows.size), np.tile(plane[:, 1], rows.size)
+    y = np.repeat(rows, len(plane))
+    # The tolerance keeps the lattice row exactly half a spacing above a flat bed
+    keep = z >= field.elevation(x, y) + (0.5 - 1e-9) * s
+    count = len(plane)
+    index = np.tile(np.arange(count), rows.size)[keep]
+    positions = np.column_stack([x[keep], y[keep], z[keep]])
+    flow = np.column_stack([velocities[index, 0], np.zeros(len(index)), velocities[index, 1]])
+
+    return positions, flow, pressures[index]
+
+def exactSolitaryBoundaryPressure3D(field: HeightField, positions: np.ndarray, height: float, depth: float,
+                                    crestX: float, spacing: float, gravity: float = 9.80665) -> np.ndarray:
+
+    '''
+
+    The pressure over density each boundary particle of a 3D tank starts with under the exact
+    solitary wave [m^2/s^2], by `exactSolitaryBoundaryPressure`'s rule: that of the water at the
+    point half a spacing inside it (above the bed, and in from the walls), plus the hydrostatic
+    increment down to the particle; zero where that point is above the surface.
+
+    '''
+
+    startX, endX, startY, endY = field.bounds
+    level = field.stillWaterLevel
+    referenceX = np.clip(positions[:, 0], startX + 0.5 * spacing, endX - 0.5 * spacing)
+    referenceY = np.clip(positions[:, 1], startY + 0.5 * spacing, endY - 0.5 * spacing)
+    referenceZ = np.maximum(positions[:, 2], field.elevation(referenceX, referenceY) + 0.5 * spacing)
+    _, pressure, surface = exactFlowInChunks(np.column_stack([referenceX, referenceZ]), height, depth, crestX, level,
+                                             gravity)
+    wet = referenceZ < level + surface
+
+    return np.where(wet, np.maximum(pressure, 0.0) + gravity * (referenceZ - positions[:, 2]), 0.0)

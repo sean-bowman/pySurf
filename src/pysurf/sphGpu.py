@@ -22,8 +22,8 @@ The solver uses the device in one of two ways:
     advance     the state goes up once (`push`), every step runs on the device (`residentRates`,
                 then `residentIntegrate` with the time step the host computes from the two maxima
                 they return), and the state comes back once (`pull`). The boundary must be one the
-                device can enforce (`canEnforce`): a container, or a bed, whose piston then holds
-                its position and speed until the state comes back.
+                device can enforce (`canEnforce`): a container; a bed, whose piston then holds its
+                position and speed until the state comes back; or a height-field bed in its tank.
 
 The state is float64 on the device as on the host: positions, velocities and densities are
 integrated in float64, and the pair sums run in float32. A float32 coordinate 30 m from the
@@ -64,7 +64,8 @@ Nothing here is a new model. tests/testSphGpu.py checks every sum against its ar
 float32 rounding, on Warp's CPU device and on CUDA where present, the velocity gradients and the
 limited artificial viscosity among them, and tests/testSphRefinement.py
 the sums the deltaSph scheme uses on clouds of mixed smoothing lengths; the bed enforcement against
-`BedBoundary.enforce` to 1e-12 in 2D and 3D; a solver run on this backend against the compiled
+`BedBoundary.enforce` to 1e-12 in 2D and 3D, and the height-field enforcement against
+`HeightFieldBoundary.enforce` to 1e-12; a solver run on this backend against the compiled
 backend; the device-resident steps against the host steps in a tank and over a bed; and a still
 tank at rest. tests/testValidationGpuBackend.py repeats the CPU backends' validation cases on it.
 
@@ -82,7 +83,7 @@ import numpy as np
 import warp as wp
 
 # Local imports
-from pysurf.sphBoundaries import BedBoundary, ContainerBoundary
+from pysurf.sphBoundaries import BedBoundary, ContainerBoundary, HeightFieldBoundary
 from pysurf.sphSolver import (antiClumpingPower, antiClumpingWeight, correctionFloor, freeSurfaceDivergence, freeSurfaceLopsidedness,
                               limiterCloseDistance, limiterFoldWidth, localShiftingCoefficient, surfaceGradient)
 
@@ -1013,6 +1014,108 @@ def enforceBed(positions: wp.array(dtype = wp.vec3d), velocities: wp.array(dtype
     positions[i] = x
     velocities[i] = v
 
+@wp.func
+def convolutionWeights(u: wp.float64) -> wp.vec4d:
+
+    '''`bathymetry.convolutionWeights`: cubic convolution's four weights a fraction u past the second point.'''
+
+    half = wp.float64(0.5)
+    u2 = u * u
+    u3 = u2 * u
+    return wp.vec4d(-half * u3 + u2 - half * u, wp.float64(1.5) * u3 - wp.float64(2.5) * u2 + wp.float64(1.0),
+                    wp.float64(-1.5) * u3 + wp.float64(2.0) * u2 + half * u, half * u3 - half * u2)
+
+@wp.func
+def convolutionSlopeWeights(u: wp.float64) -> wp.vec4d:
+
+    '''`bathymetry.convolutionSlopeWeights`: the weights' derivatives with respect to u.'''
+
+    u2 = u * u
+    return wp.vec4d(wp.float64(-1.5) * u2 + wp.float64(2.0) * u - wp.float64(0.5), wp.float64(4.5) * u2 - wp.float64(5.0) * u,
+                    wp.float64(-4.5) * u2 + wp.float64(4.0) * u + wp.float64(0.5), wp.float64(1.5) * u2 - u)
+
+@wp.kernel
+def enforceHeightField(positions: wp.array(dtype = wp.vec3d), velocities: wp.array(dtype = wp.vec3d),
+                       fluid: wp.array(dtype = wp.uint8), table: wp.array2d(dtype = wp.float64), originX: wp.float64,
+                       originY: wp.float64, stepX: wp.float64, stepY: wp.float64, clearance: wp.float64,
+                       lowY: wp.float64, highY: wp.float64, offshoreWall: int, lowX: wp.float64, highX: wp.float64):
+
+    '''
+
+    `HeightFieldBoundary.enforce`: fluid below the bed rises to a quarter spacing above it and
+    loses its velocity into it along the bed's normal; fluid past a wall returns to it.
+
+    '''
+
+    i = wp.tid()
+    if fluid[i] == wp.uint8(0):
+        return
+    x = positions[i]
+    v = velocities[i]
+    zero = wp.float64(0.0)
+    one = wp.float64(1.0)
+
+    # The bed and its gradient, as `HeightField` interpolates them
+    ny = table.shape[0]
+    nx = table.shape[1]
+    rawX = (x[0] - originX) / stepX
+    rawY = (x[1] - originY) / stepY
+    fx = wp.clamp(rawX, zero, wp.float64(nx - 1))
+    fy = wp.clamp(rawY, zero, wp.float64(ny - 1))
+    ix = int(wp.floor(fx))
+    iy = int(wp.floor(fy))
+    wx = convolutionWeights(fx - wp.float64(ix))
+    wy = convolutionWeights(fy - wp.float64(iy))
+    sx = convolutionSlopeWeights(fx - wp.float64(ix))
+    sy = convolutionSlopeWeights(fy - wp.float64(iy))
+    bed = zero
+    slopeX = zero
+    slopeY = zero
+    for a in range(4):
+        row = wp.clamp(iy - 1 + a, 0, ny - 1)
+        along = zero
+        alongSlope = zero
+        for b in range(4):
+            value = table[row, wp.clamp(ix - 1 + b, 0, nx - 1)]
+            along += wx[b] * value
+            alongSlope += sx[b] * value
+        bed += wy[a] * along
+        slopeX += wy[a] * alongSlope
+        slopeY += sy[a] * along
+    slopeX = slopeX / stepX
+    slopeY = slopeY / stepY
+    if rawX < zero or rawX > wp.float64(nx - 1):
+        slopeX = zero
+    if rawY < zero or rawY > wp.float64(ny - 1):
+        slopeY = zero
+    if x[2] < bed + clearance:
+        x[2] = bed + clearance
+        length = wp.sqrt(slopeX * slopeX + slopeY * slopeY + one)
+        normal = wp.vec3d(-slopeX / length, -slopeY / length, one / length)
+        inward = wp.dot(v, normal)
+        if inward < zero:
+            v = v - inward * normal
+
+    # Side walls
+    if x[1] < lowY:
+        x[1] = lowY
+        v[1] = wp.max(v[1], zero)
+    if x[1] > highY:
+        x[1] = highY
+        v[1] = wp.min(v[1], zero)
+
+    # Offshore and shoreward walls
+    if offshoreWall != 0:
+        if x[0] < lowX:
+            x[0] = lowX
+            v[0] = wp.max(v[0], zero)
+    if x[0] > highX:
+        x[0] = highX
+        v[0] = wp.min(v[0], zero)
+
+    positions[i] = x
+    velocities[i] = v
+
 #----------------------------------------------------------------------#
 # -- Host Interface -- #
 #----------------------------------------------------------------------#
@@ -1536,9 +1639,9 @@ class PairSums:
     # -- Device Steps -- #
     def canEnforce(self, boundary) -> bool:
 
-        '''Whether the device can enforce this boundary: none, a `ContainerBoundary` or a `BedBoundary`.'''
+        '''Whether the device can enforce this boundary: none, a `ContainerBoundary`, a `BedBoundary` or a `HeightFieldBoundary`.'''
 
-        return boundary is None or isinstance(boundary, (ContainerBoundary, BedBoundary))
+        return boundary is None or isinstance(boundary, (ContainerBoundary, BedBoundary, HeightFieldBoundary))
 
     def setBoundary(self, boundary, particles) -> None:
 
@@ -1549,7 +1652,7 @@ class PairSums:
 
         Parameters:
         -----------
-        boundary : ContainerBoundary | BedBoundary | None
+        boundary : ContainerBoundary | BedBoundary | HeightFieldBoundary | None
             The solver's boundary
         particles : ParticleSystem
             The particle state, for the piston's speed
@@ -1577,6 +1680,14 @@ class PairSums:
                 wp.array(bed.z, dtype = wp.float64, device = self.device), self.dimensions - 1, clearance,
                 1 if sideWalls else 0, float(boundary.width or 0.0), 1 if boundary.wallTop is not None else 0,
                 float(boundary.wallX), pistonSpeed, float(endLimit)])
+        elif isinstance(boundary, HeightFieldBoundary):
+            field, clearance = boundary.field, 0.25 * boundary.spacing
+            startX, endX, startY, endY = field.bounds
+            self._enforcement = (enforceHeightField, [
+                d['positions'], d['velocities64'], d['fluid'], wp.array(field.z, dtype = wp.float64, device = self.device),
+                float(field.x[0]), float(field.y[0]), field.spacingX, field.spacingY, clearance, startY + clearance,
+                endY - clearance, 1 if boundary.offshoreWall else 0, startX + clearance,
+                endX - clearance if boundary.endWall else endX])
         else:
             raise ValueError(f'The device cannot enforce a {type(boundary).__name__}; step from the host.')
 

@@ -4,7 +4,8 @@
 '''
 
 Checks of pysurf.bathymetry against the closed forms of a plane beach: flat at z = 0 to the toe,
-then z = (x - toe) tan(beta), with the still water level at z = d.
+then z = (x - toe) tan(beta), with the still water level at z = d; and of the height field against a
+quadratic surface, which cubic convolution reproduces exactly, and the ridge's formula.
 
 Sean Bowman [10/11/2026]
 
@@ -15,7 +16,7 @@ import math
 import numpy as np
 import pytest
 
-from pysurf.bathymetry import Bathymetry
+from pysurf.bathymetry import Bathymetry, HeightField
 from pysurf.errors import InvalidInputError
 
 depth, toeX, slope, endX = 1.0, 10.0, 1.0 / 35.0, 60.0
@@ -94,3 +95,62 @@ def testAPlaneBeachNeedsItsToeInsideTheProfile():
         Bathymetry.planeBeach(depth, toeX = 70.0, slope = slope, endX = endX)
     with pytest.raises(InvalidInputError):
         Bathymetry.planeBeach(depth, toeX, slope = -0.1, endX = endX)
+
+def quadratic(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+
+    return 0.3 + 0.05 * x - 0.02 * y + 0.01 * x * x - 0.03 * x * y + 0.02 * y * y + 0.004 * x * x * y * y
+
+def testTheHeightFieldReproducesAQuadraticAndItsGradient():
+
+    field = HeightField.fromFunction(quadratic, (0.0, 3.0, -1.0, 2.0), 0.13, stillWaterLevel = 1.0)
+    rng = np.random.default_rng(1)
+    x, y = rng.uniform(0.0, 3.0, 500), rng.uniform(-1.0, 2.0, 500)
+    gradient = field.gradient(x, y)
+
+    assert field.elevation(x, y) == pytest.approx(quadratic(x, y), abs = 1e-12)
+    assert gradient[:, 0] == pytest.approx(0.05 + 0.02 * x - 0.03 * y + 0.008 * x * y * y, abs = 1e-12)
+    assert gradient[:, 1] == pytest.approx(-0.02 - 0.03 * x + 0.04 * y + 0.008 * x * x * y, abs = 1e-12)
+
+def testTheHeightFieldPassesThroughItsGridAndHoldsBeyondIt():
+
+    field = HeightField.fromFunction(lambda x, y: np.sin(x) * np.cos(y), (0.0, 2.0, 0.0, 1.0), 0.1, stillWaterLevel = 1.0)
+    gridX, gridY = np.meshgrid(field.x, field.y)
+
+    assert field.elevation(gridX, gridY) == pytest.approx(field.z, abs = 1e-14)
+    assert field.elevation(100.0, 0.5) == pytest.approx(field.elevation(field.x[-1], 0.5))
+    assert field.gradient(100.0, 0.5)[0] == 0.0
+
+def testTheNormalIsAUnitVectorAgainstTheGradient():
+
+    field = HeightField.fromFunction(quadratic, (0.0, 3.0, -1.0, 2.0), 0.13, stillWaterLevel = 1.0)
+    x, y = np.array([0.5, 1.7, 2.9]), np.array([-0.5, 0.3, 1.9])
+    normal, gradient = field.normal(x, y), field.gradient(x, y)
+
+    assert np.linalg.norm(normal, axis = 1) == pytest.approx(1.0)
+    assert np.all(normal[:, 2] > 0.0)
+    assert normal[:, 0] / normal[:, 2] == pytest.approx(-gradient[:, 0])
+    assert normal[:, 1] / normal[:, 2] == pytest.approx(-gradient[:, 1])
+
+def testTheRidgeFollowsGuyenneAndGrilli():
+
+    field = HeightField.ridge(0.25)
+    gridX, gridY = np.meshgrid(field.x, field.y)
+    exact = np.maximum(gridX - 5.225, 0.0) / 15.0 / np.cosh(0.25 * gridY)**2
+    section = field.section(0.0)
+
+    assert field.bounds == (0.0, 19.0, -4.0, 4.0)
+    assert HeightField.ridge(0.25, symmetric = True).bounds == (0.0, 19.0, 0.0, 4.0)
+    assert field.z == pytest.approx(exact, abs = 1e-15)
+    # The centre line is the 1:15 plane beach past the toe
+    assert section.elevation(np.array([8.0, 16.0, 19.0])) == pytest.approx(np.array([2.775, 10.775, 13.775]) / 15.0)
+    assert field.lowestElevation() == 0.0
+
+@pytest.mark.parametrize('arguments', [
+    dict(x = [0.0, 1.0, 2.0], y = [0.0, 1.0, 2.0, 3.0], z = np.zeros((4, 3))),
+    dict(x = [0.0, 1.0, 2.5, 3.0], y = [0.0, 1.0, 2.0, 3.0], z = np.zeros((4, 4))),
+    dict(x = [0.0, 1.0, 2.0, 3.0], y = [0.0, 1.0, 2.0, 3.0], z = np.zeros((3, 4))),
+])
+def testIrregularHeightFieldsAreRejected(arguments):
+
+    with pytest.raises(InvalidInputError):
+        HeightField(stillWaterLevel = 1.0, **arguments)

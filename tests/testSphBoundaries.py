@@ -14,8 +14,8 @@ Sean Bowman [10/11/2026]
 import numpy as np
 import pytest
 
-from pysurf.bathymetry import Bathymetry
-from pysurf.sphBoundaries import BedBoundary, ContainerBoundary, ShearedBedBoundary
+from pysurf.bathymetry import Bathymetry, HeightField
+from pysurf.sphBoundaries import BedBoundary, ContainerBoundary, HeightFieldBoundary, ShearedBedBoundary
 from pysurf.sphParticles import ParticleSystem, latticePoints
 
 s = 0.02    # [m]
@@ -196,3 +196,62 @@ def testEachShearedRowHasAPistonOfItsOwn(beach):
     assert moved.any()
     assert np.all(np.floor(particles.positions[moved, 1] / s) == 2)
     assert particles.velocities[moved, 0] == pytest.approx(0.3)
+
+@pytest.fixture
+def ridgeTank() -> HeightFieldBoundary:
+
+    field = HeightField.ridge(0.5, endX = 8.0, halfWidth = 2.0, gridSpacing = 1.0 / 16.0)
+
+    return HeightFieldBoundary(field, 0.125, nLayers = 3, wallTop = 1.5)
+
+def testHeightFieldLayersSitBelowTheBedAlongItsNormal(ridgeTank):
+
+    field, s = ridgeTank.field, ridgeTank.spacing
+    xs, ys = ridgeTank.columns()
+    columns = xs.size * ys.size
+    bed = ridgeTank.positions()[:3 * columns]
+
+    gridX, gridY = np.meshgrid(xs, ys)
+    surface = np.column_stack([gridX.ravel(), gridY.ravel(), field.elevation(gridX.ravel(), gridY.ravel())])
+    normal = field.normal(surface[:, 0], surface[:, 1])
+    for layer in range(3):
+        offset = surface - bed[layer * columns:(layer + 1) * columns]
+        assert np.linalg.norm(offset, axis = 1) == pytest.approx((layer + 0.5) * s)
+        assert np.sum(offset * normal, axis = 1) == pytest.approx((layer + 0.5) * s)
+
+def testHeightFieldWallsCloseTheTank(ridgeTank):
+
+    field, s = ridgeTank.field, ridgeTank.spacing
+    points = ridgeTank.positions()
+    startX, endX, startY, endY = field.bounds
+    outside = (points[:, 0] < startX) | (points[:, 0] > endX) | (points[:, 1] < startY) | (points[:, 1] > endY)
+    walls = points[outside]
+
+    # Three layers behind every wall, reaching past the corners and up to the top
+    assert walls[:, 0].min() == pytest.approx(startX - 2.5 * s) and walls[:, 0].max() == pytest.approx(endX + 2.5 * s)
+    assert walls[:, 1].min() == pytest.approx(startY - 2.5 * s) and walls[:, 1].max() == pytest.approx(endY + 2.5 * s)
+    assert 1.5 - s < walls[:, 2].max() < 1.5
+    # Each wall reaches below the bed's deepest layer at its foot
+    end = walls[walls[:, 0] > endX]
+    assert end[:, 2].min() < field.elevation(endX, 0.0) - 2.5 * s
+    # Heights on the fluid lattice
+    assert (walls[:, 2] / s - 0.5) == pytest.approx(np.round(walls[:, 2] / s - 0.5), abs = 1e-9)
+
+def testHeightFieldEnforcementLiftsFluidAndRemovesOnlyTheInwardVelocity(ridgeTank):
+
+    field, s = ridgeTank.field, ridgeTank.spacing
+    x, y = 6.0, 0.7
+    bedZ = float(field.elevation(x, y))
+    normal = field.normal(x, y)
+    fluid = np.array([[x, y, bedZ - 0.01], [x, y, bedZ + 0.3], [-0.3, 2.4, 0.5]])
+    velocities = np.array([-normal + [0.0, 0.5, 0.0], [-1.0, 0.0, -1.0], [-1.0, 1.0, 0.0]])
+    particles = ParticleSystem.assemble(fluid, ridgeTank.positions(), s, 1000.0, velocities)
+
+    ridgeTank.enforce(particles)
+    positions, moved = particles.positions, particles.velocities
+
+    assert positions[0] == pytest.approx([x, y, bedZ + 0.25 * s])
+    assert np.dot(moved[0], normal) == pytest.approx(0.0, abs = 1e-12)
+    assert positions[1] == pytest.approx(fluid[1]) and moved[1] == pytest.approx(velocities[1])
+    assert positions[2] == pytest.approx([0.25 * s, 2.0 - 0.25 * s, 0.5])
+    assert moved[2] == pytest.approx([0.0, 0.0, 0.0])
