@@ -51,7 +51,7 @@ from scipy.spatial import cKDTree
 from pysurf import constants
 from pysurf.bathymetry import Bathymetry
 from pysurf.bemSolver import FlowField
-from pysurf.sphParticles import latticePoints
+from pysurf.sphParticles import bedFittedPoints, jitterPoints, latticePoints
 
 def windowBathymetry(bathymetry: Bathymetry, backX: float, frontX: float) -> Bathymetry:
 
@@ -92,53 +92,94 @@ def nearestSurfacePoint(surface: np.ndarray, points: np.ndarray, candidates: int
 
     return distance[rows, best], closest[rows, best], np.column_stack([tangent[:, 1], -tangent[:, 0]])
 
-def seedWater(field: FlowField, bed: Bathymetry, spacing: float, surfaceClearance: float = 0.25) -> np.ndarray:
+def seedWater(field: FlowField, bed: Bathymetry, spacing: float, surfaceClearance: float = 0.25,
+              bedFitted: bool = False, jitter: float = 0.0, seed: int = 1) -> np.ndarray:
 
     '''
 
     Lattice points filling the water over a window's bed, half a spacing clear of the bed and of
     the walls at its two ends, shape (N, 2) [m]. A point is in the water when the boundary of the
     potential flow winds once around it, which leaves the tube under a jet, and the air between
-    the jet and the face, empty.
+    the jet and the face, empty. With `bedFitted` the points are `sphParticles.bedFittedPoints`',
+    half a spacing above the bed in every column, rather than the square lattice's. With `jitter`
+    each point then moves off its place by a seeded random offset of up to `jitter` spacings along
+    each axis (`sphParticles.jitterPoints`), reflected back across the walls and the bed's line; a
+    point carried out of the water returns across the free surface along its normal, and one still
+    outside keeps its place.
 
     A lattice point that falls closer to the free surface than `surfaceClearance` spacings moves
-    in along the surface normal to that depth. The velocity there is a difference of the potential
-    across a step a millionth of the tank long; a point on the surface itself would straddle the
-    jump in the representation across the boundary, and read it as a velocity.
+    in along the surface normal to that depth (`clearSurface`).
 
     '''
 
     top = float(np.max(field.surface[:, 1])) + spacing
-    points = latticePoints([bed.startX, float(np.min(bed.z))], [bed.endX, top], spacing)
+    lower, upper = [bed.startX, float(np.min(bed.z))], [bed.endX, top]
+    points = (bedFittedPoints(lower, upper, spacing, bed.elevation) if bedFitted
+              else latticePoints(lower, upper, spacing))
     # The tolerance keeps the lattice rows and columns exactly half a spacing from a flat bed and a wall
     clear = ((points[:, 0] <= bed.endX - (0.5 - 1e-9) * spacing)
              & (points[:, 1] >= bed.elevation(points[:, 0]) + (0.5 - 1e-9) * spacing))
     points = points[clear]
     points = points[field.inside(points)]
+    if jitter > 0.0:
+        laid = points
+        points = jitterPoints(points, spacing, jitter, seed, [bed.startX], [bed.endX], bed.elevation)
+        outside = ~field.inside(points)
+        if np.any(outside):
+            # Mirrored across the surface, which may overhang, along its normal
+            distance, closest, inward = nearestSurfacePoint(field.surface, points[outside])
+            points[outside] = closest + distance[:, None] * inward
+        stray = ~field.inside(points)
+        points[stray] = laid[stray]
 
-    distance, closest, inward = nearestSurfacePoint(field.surface, points)
-    near = distance < surfaceClearance * spacing
-    points[near] = closest[near] + surfaceClearance * spacing * inward[near]
+    return clearSurface(field.surface, points, spacing, surfaceClearance)
+
+def clearSurface(surface: np.ndarray, points: np.ndarray, spacing: float, clearance: float = 0.25) -> np.ndarray:
+
+    '''
+
+    Points closer to a free surface than `clearance` spacings, moved in along the surface normal to
+    that depth, shape (N, 2) [m]. The potential flow's velocity at a point is a difference of the
+    potential across a step a millionth of the tank long; a point on the surface itself would
+    straddle the jump in the representation across the boundary, and read it as a velocity.
+
+    '''
+
+    points = np.array(points, dtype = float)
+    if len(points) == 0:
+        return points
+    distance, closest, inward = nearestSurfacePoint(surface, points)
+    near = distance < clearance * spacing
+    points[near] = closest[near] + clearance * spacing * inward[near]
 
     return points
 
-def seedStillWater(bed: Bathymetry, spacing: float, fromX: float) -> np.ndarray:
+def seedStillWater(bed: Bathymetry, spacing: float, fromX: float, bedFitted: bool = False, jitter: float = 0.0,
+                   seed: int = 1) -> np.ndarray:
 
     '''
 
     Lattice points filling still water over a window's bed beyond x = fromX, where the potential
     flow's tank has ended, shape (N, 2) [m]: half a spacing clear of the bed and of the wall at the
     window's end, up to still water level. The lattice is the one `seedWater` lays, so the two meet
-    without a seam.
+    without a seam; with `bedFitted`, both lay `sphParticles.bedFittedPoints`' columns. With
+    `jitter` each point then moves off its place at random (`sphParticles.jitterPoints`),
+    reflected back across the walls, the bed's line and still water level.
 
     '''
 
     level = bed.stillWaterLevel
-    points = latticePoints([bed.startX, float(np.min(bed.z))], [bed.endX, level], spacing)
+    lower, upper = [bed.startX, float(np.min(bed.z))], [bed.endX, level]
+    points = (bedFittedPoints(lower, upper, spacing, bed.elevation) if bedFitted
+              else latticePoints(lower, upper, spacing))
     keep = ((points[:, 0] > fromX) & (points[:, 0] <= bed.endX - (0.5 - 1e-9) * spacing)
             & (points[:, 1] >= bed.elevation(points[:, 0]) + (0.5 - 1e-9) * spacing))
+    points = points[keep]
+    if jitter > 0.0:
+        points = jitterPoints(points, spacing, jitter, seed, [bed.startX], [bed.endX], bed.elevation,
+                              lambda x: np.full(np.shape(x), level))
 
-    return points[keep]
+    return points
 
 def boundaryPressure(field: FlowField, bed: Bathymetry, positions: np.ndarray, spacing: float,
                      stillWaterFromX: float | None = None) -> np.ndarray:

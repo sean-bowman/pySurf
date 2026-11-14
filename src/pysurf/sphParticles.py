@@ -12,7 +12,8 @@ energies and diagnostics a run reports are its methods.
 Seeding is two steps every scenario shares: `fillRegion` lays a square lattice over a bounding
 box and keeps the points a predicate accepts (below a free surface and above a bed, say), and
 `ParticleSystem.assemble` joins fluid and boundary positions into one state with masses set from
-the lattice spacing.
+the lattice spacing. Over a sloping bed `bedFittedPoints` lays columns that stand on the bed, and
+`jitterPoints` moves laid points off their lattice, so the water starts without ordered rows.
 
 ----------------------------------------------------------------------
                             Validation status
@@ -20,7 +21,9 @@ the lattice spacing.
 
 Nothing here is a model beyond bookkeeping. tests/testSphParticles.py checks the lattice count and
 spacing, that particle mass times count reproduces the filled volume at the reference density, and
-the kinetic and potential energies against hand-computed values.
+the kinetic and potential energies against hand-computed values. It checks that jittered points
+keep their count, stay inside the walls, the floor's line and the ceiling, move no more than the
+amplitude along a horizontal axis, and repeat with their seed.
 
 Sean Bowman [02/05/2026]
 
@@ -289,6 +292,117 @@ def latticePoints(lower, upper, spacing: float) -> np.ndarray:
     grids = np.meshgrid(*axes, indexing = 'xy')
 
     return np.column_stack([grid.ravel() for grid in grids])
+
+def bedFittedPoints(lower, upper, spacing: float, floor: Callable[..., np.ndarray]) -> np.ndarray:
+
+    '''
+
+    Columns of points standing on a floor: at `latticePoints`' horizontal positions in the box
+    [lower, upper], each column from half a spacing above the floor up to the box's top, one
+    spacing apart.
+
+    Next to a sloping bed the square lattice leaves its lowest point anywhere from half a spacing
+    to one and a half above the bed, in steps along the slope. The bed's pressure does not hold
+    that arrangement at rest: still water laid on it falls into the steps and keeps moving. These
+    columns keep the gap at half a spacing everywhere and leave the uneven gap at the top, where a
+    free surface carries no pressure. Over a flat floor at the box's bottom they are the lattice's
+    points to rounding, in column order.
+
+    Parameters:
+    -----------
+    lower, upper : array-like
+        Box corners, length 2 or 3 [m]; the last coordinate is vertical
+    spacing : float
+        Point spacing [m]
+    floor : Callable
+        The floor's elevation [m], from the horizontal coordinates, one array each: floor(x) in
+        2D, floor(x, y) in 3D. A floor below the box's bottom counts as the bottom.
+
+    Returns:
+    --------
+    np.ndarray : Points, shape (N, dim)
+
+    '''
+
+    lower, upper = np.asarray(lower, dtype = float), np.asarray(upper, dtype = float)
+    axes = [np.arange(low + spacing / 2.0, high, spacing) for low, high in zip(lower[:-1], upper[:-1])]
+    horizontal = [grid.ravel() for grid in np.meshgrid(*axes, indexing = 'ij')]
+    bottom = np.maximum(np.asarray(floor(*horizontal), dtype = float), lower[-1]) + spacing / 2.0
+
+    # Counted as np.arange counts, so a column on the box's bottom holds as many points as the lattice's
+    counts = np.maximum(np.ceil((upper[-1] - bottom) / spacing), 0.0).astype(int)
+    column = np.repeat(np.arange(bottom.size), counts)
+    layer = np.arange(column.size) - np.repeat(np.cumsum(counts) - counts, counts)
+
+    return np.column_stack([coordinate[column] for coordinate in horizontal] + [bottom[column] + layer * spacing])
+
+def jitterPoints(points: np.ndarray, spacing: float, amplitude: float, seed: int, lower, upper,
+                 floor: Callable[..., np.ndarray], ceiling: Callable[..., np.ndarray] | None = None) -> np.ndarray:
+
+    '''
+
+    Points moved off their lattice: each by a seeded uniform random offset of up to `amplitude`
+    spacings along every axis, then reflected back across any face it crossed. The faces are the
+    walls half a spacing in from the box [lower, upper] along each horizontal axis, the line half a
+    spacing above the floor, and the ceiling (a free surface). A point the reflections leave outside,
+    in water thinner than its offset, keeps its place.
+
+    Water laid in ordered rows keeps them: under a steepening wave the rows buckle together and the
+    face kinks where they end, which delays or advances the breaking point at a coarse spacing.
+    Moving each point off the lattice removes the order and keeps every point, so the water's volume
+    is the ordered start's. No point moves more than `amplitude` spacings along a horizontal axis;
+    vertically, a reflection from a sloping floor or surface adds up to twice that face's rise over
+    the point's horizontal move.
+
+    Parameters:
+    -----------
+    points : np.ndarray
+        Points inside the water, shape (N, dim); the last coordinate is vertical [m]
+    spacing : float
+        Point spacing [m]
+    amplitude : float
+        Largest offset along each axis, in spacings; zero returns the points unchanged
+    seed : int
+        Seed of the random offsets
+    lower, upper : array-like
+        The walls along each horizontal axis, length dim - 1 [m]
+    floor : Callable
+        The floor's elevation [m], from the horizontal coordinates, one array each: floor(x) in
+        2D, floor(x, y) in 3D
+    ceiling : Callable | None
+        The free surface's elevation [m], called as `floor` is; None for no surface to reflect from
+
+    Returns:
+    --------
+    np.ndarray : The moved points, shape (N, dim)
+
+    '''
+
+    points = np.asarray(points, dtype = float)
+    if amplitude <= 0.0:
+        return points.copy()
+    moved = points + np.random.default_rng(seed).uniform(-amplitude, amplitude, points.shape) * spacing
+    horizontal = points.shape[1] - 1
+    lower, upper = np.asarray(lower, dtype = float), np.asarray(upper, dtype = float)
+
+    def reflect(values: np.ndarray, low: np.ndarray | float, high: np.ndarray | float) -> np.ndarray:
+        values = np.where(values < low, 2.0 * low - values, values)
+        return np.where(values > high, 2.0 * high - values, values)
+
+    for axis in range(horizontal):
+        moved[:, axis] = reflect(moved[:, axis], lower[axis] + 0.5 * spacing, upper[axis] - 0.5 * spacing)
+    bottom = np.asarray(floor(*moved[:, :horizontal].T), dtype = float) + 0.5 * spacing
+    top = (np.asarray(ceiling(*moved[:, :horizontal].T), dtype = float) if ceiling is not None
+           else np.full(len(moved), np.inf))
+    # The surface excludes its own height, as the seeding functions' tests do
+    moved[:, -1] = reflect(moved[:, -1], bottom, top - 1e-9 * spacing)
+
+    walls = np.all((moved[:, :horizontal] >= lower + (0.5 - 1e-9) * spacing)
+                   & (moved[:, :horizontal] <= upper - (0.5 - 1e-9) * spacing), axis = 1)
+    stray = ~walls | (moved[:, -1] < bottom - 1e-9 * spacing) | (moved[:, -1] >= top)
+    moved[stray] = points[stray]
+
+    return moved
 
 def fillRegion(inside: Callable[[np.ndarray], np.ndarray], lower, upper, spacing: float) -> np.ndarray:
 

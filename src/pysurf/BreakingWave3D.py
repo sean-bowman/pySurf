@@ -10,8 +10,9 @@ low-dissipation scheme in a rectangular tank over a height field.
                 (`sphBoundaries.HeightFieldBoundary`)
     start       the exact potential flow solitary wave of height H in water `depth` deep, its crest
                 at `crestX` and straight along y (`waveMakers.exactSolitaryWaveFluid3D`), with its
-                pressure; each boundary particle starts with the pressure of the water just inside
-                it
+                pressure, in columns half a spacing clear of the bed (`bedFitted`) or on the
+                square lattice, each particle moved off its place at random (`startJitter`) or
+                not; each boundary particle starts with the pressure of the water just inside it
     scheme      `BreakingWave`'s 'deltaSph': Wendland C2 at h = 3 spacings, hydrostatic delta-SPH
                 density diffusion, the kernel gradient correction in the continuity equation, wall
                 pressure extrapolated from the water, alpha 0.01 with the limited artificial
@@ -52,14 +53,37 @@ Guyenne, P. & Grilli, S.T. (2006) -- Numerical study of three-dimensional overtu
 The scheme is `BreakingWave`'s, whose 2D validation status that module states. In 3D the model is
 compared with the sloping ridge of Guyenne and Grilli (2006), with the criteria of
 tests/testValidationRidgeOverturn.py, run at 32 particles per depth in the full tank outside the
-test suite (about 5 GPU hours a ridge). The breaking point passes for all five ridges, k = 0.10
-to 0.50: time +3.2 to +4.8 percent (limit 5), crest position +0.35 to +0.47 h0 (limit 0.5), crest
-height -0.6 to +1.5 percent (limit 5). The crest arrives on time, within 0.14 h0 and 2 percent of
-the reference at its breaking time, and the face turns vertical 0.25 to 0.41 sqrt(h0/g) late, so
-time and position sit near the edges of their bands. The velocity at k = 0.25 fails: the largest
-horizontal speed at z = -0.2 h0 lies 4.1 percent above 0.651 sqrt(g h0) (limit 10), and the
-largest spanwise velocity is 0.125 of the largest streamwise one against 0.085 (+47 percent, limit
-30). No run reaches the jet's touchdown before the face runs into water too shallow to read.
+test suite (5 to 7 GPU hours a ridge).
+
+From bed-fitted columns, the default, the breaking point passes for four of the five ridges and
+fails at k = 0.25 on position: time +1.2 to +4.7 percent (limit 5), crest position +0.07 to +0.53
+h0 (limit 0.5, which k = 0.25 exceeds), crest height -4.5 to -0.5 percent (limit 5). The velocity
+at k = 0.25 passes: the largest horizontal speed at z = -0.2 h0 within 0.3 percent of 0.651
+sqrt(g h0) (limit 10) and the largest spanwise velocity 0.085 of the largest streamwise one
+against 0.085 (+0.1 percent, limit 30). The columns' rows stay ordered ahead of the wave and
+buckle under its front, and the face carries their ends. At k = 0.50 the face slope jumps from
++0.14 to -0.62 within 0.04 sqrt(h0/g) where the top row ends, so that ridge's breaking point, 0.31
+sqrt(h0/g) earlier than the lattice start's, is set by the start's arrangement.
+
+From the square lattice the breaking point passes for all five ridges, k = 0.10 to 0.50: time +3.2
+to +4.8 percent, crest position +0.35 to +0.47 h0, crest height -0.6 to +1.5 percent. The velocity
+at k = 0.25 fails: the speed +4.1 percent and the spanwise ratio 0.125 (+47 percent). That start
+leaves the lowest particles 0.5 to 1.5 spacings above a slope; they fall into the steps, and the
+disordered layer they leave on the bed carries the spanwise excess. Still water from it never
+settles; from bed-fitted columns it does.
+
+From either start the crest arrives on time, within 0.15 h0 of the reference position at its
+breaking time and within 2 percent in height (except k = 0.50 from bed-fitted columns, -4.4), and
+the face turns vertical late: 0.10 to 0.37 sqrt(h0/g) from bed-fitted columns, 0.25 to 0.41 from
+the lattice. Time and position therefore sit near the edges of their bands. The lag is the 2D
+scheme's at this resolution: the ridge's centre-line section run in 2D from bed-fitted columns
+lags Guyenne and Grilli's 2D result by 0.372 and 0.101 sqrt(h0/g) at 32 and 64 particles per depth
+(from the lattice 0.362, 0.132 and 0.041 at 32, 64 and 128). Less that 2D lag, the breaking
+point's shift from 2D to 3D matches theirs for every k from the lattice, within 0.12 sqrt(h0/g)
+in time and 0.1 h0 in position. From bed-fitted columns it matches within 0.02 sqrt(h0/g) and 0.15
+h0 at k = 0.25 and 0.34, and comes 0.11 to 0.27 sqrt(h0/g) early at k = 0.10, 0.17 and 0.50. Only
+the bed-fitted runs at k = 0.25 and 0.34 reach the jet's touchdown before the face runs into water
+too shallow to read.
 tests/testBreakingWave3D.py checks the build: over a flat bed the start is the 2D exact wave in
 every lattice row, with the 2D rule's boundary pressures; a section reads its own two rows; and
 after a short run on the GPU the flow mid-depth under the crest lies within 5 percent of the exact
@@ -83,8 +107,10 @@ from scipy.spatial import cKDTree
 # Local imports
 from pysurf import constants, waveTheory
 from pysurf.bathymetry import HeightField
+from pysurf.BreakingWave import defaultJitter, defaultPacking, jitteredFaceArc, latticeFaceArc
 from pysurf.errors import InvalidInputError, NumericalInstabilityError
 from pysurf.sphBoundaries import HeightFieldBoundary
+from pysurf.sphPacking import PackingResult, packPoints
 from pysurf.sphParticles import ParticleSystem
 from pysurf.sphSolver import SimulationConfig, WcsphSolver, taitDensity, taitEquationOfState
 from pysurf.waveBreaking import BreakingTracker
@@ -144,6 +170,24 @@ class BreakingWave3D:
         The solver's backend: 'gpu', or 'numpy' for small tests
     solverOptions : dict | None
         `SimulationConfig` fields that replace the scheme's
+    bedFitted : bool
+        Lay the starting wave in columns half a spacing clear of the bed
+        (`sphParticles.bedFittedPoints`); False for the square lattice, whose lowest particles sit
+        half a spacing to one and a half above a slope and fall into those steps
+    startJitter : float | None
+        Move each starting particle off its place by a seeded uniform random offset of up to this
+        many spacings along x, y and z, reflected back into the water, with the exact flow at its
+        final place (`waveMakers.exactSolitaryWaveFluid3D`); 0 for none. None takes
+        `BreakingWave`'s for its 'deltaSph' scheme
+    startSeed : int
+        Seed of the start's random offsets
+    startPacking : bool | None
+        Relax the laid start before its flow and pressure are set, between the boundary's fixed
+        particles and below the wave's surface (`sphPacking.packPoints`, as `BreakingWave`'s
+        `startPacking`). None takes `BreakingWave`'s for its 'deltaSph' scheme
+    faceArc : float | None
+        The arc the sections' face slope is read over, in spacings (`waveBreaking.contourFace`);
+        None for 2 when the start lies on its lattice and 6 when it is jittered
 
     '''
 
@@ -152,7 +196,9 @@ class BreakingWave3D:
                  sectionRows: int = 2, searchFromX: float | None = None, recordTimes: tuple = (),
                  frameInterval: float = 0.1, trackInterval: float = 0.01, endTime: float | None = None,
                  wallTop: float | None = None, smoothingLengthRatio: float = 3.0, alphaViscosity: float = 0.01,
-                 soundSpeedFactor: float = 10.0, backend: str = 'gpu', solverOptions: dict | None = None) -> None:
+                 soundSpeedFactor: float = 10.0, backend: str = 'gpu', solverOptions: dict | None = None,
+                 bedFitted: bool = True, startJitter: float | None = None, startSeed: int = 1,
+                 faceArc: float | None = None, startPacking: bool | None = None) -> None:
 
         self.field = field
         self.waveHeight = float(waveHeight)                 # [m]
@@ -174,8 +220,15 @@ class BreakingWave3D:
         self.soundSpeedFactor = float(soundSpeedFactor)
         self.backend = backend
         self.solverOptions = dict(solverOptions or {})
+        self.bedFitted = bool(bedFitted)
+        self.startJitter = float(startJitter if startJitter is not None else defaultJitter['deltaSph'])
+        self.startSeed = int(startSeed)
+        self.startPacking = bool(startPacking if startPacking is not None else defaultPacking['deltaSph'])
+        self.faceArc = float(faceArc if faceArc is not None
+                             else jitteredFaceArc if self.startJitter > 0.0 else latticeFaceArc)
         self._validateInputs()
 
+        self.packing: PackingResult | None = None
         self.boundary: HeightFieldBoundary | None = None
         self.particles: ParticleSystem | None = None
         self.solver: WcsphSolver | None = None
@@ -207,6 +260,12 @@ class BreakingWave3D:
         for y in self.sections:
             if not (field.startY - 1e-9 <= y <= field.endY + 1e-9):
                 raise InvalidInputError('Every section must lie inside the tank.', parameterName = 'sections', value = y)
+        if not (0.0 <= self.startJitter < 0.5):
+            raise InvalidInputError('The start jitter must lie from 0 to below half a spacing.', parameterName = 'startJitter',
+                                    value = self.startJitter)
+        if not (1.0 <= self.faceArc <= 12.0):
+            raise InvalidInputError('The face slope arc must lie from 1 to 12 spacings.', parameterName = 'faceArc',
+                                    value = self.faceArc)
 
     def _sectionMask(self, y: float) -> np.ndarray:
 
@@ -277,7 +336,20 @@ class BreakingWave3D:
 
         self.boundary = HeightFieldBoundary(field, s, nLayers = layers, wallTop = self.wallTop)
         floor = self.boundary.latticeFloor
-        fluidPositions, fluidVelocities, fluidPressures = exactSolitaryWaveFluid3D(field, H, d, self.crestX, s, floor)
+        pack = None
+        if self.startPacking:
+            fixed = self.boundary.positions()
+            kernelType = self.solverOptions.get('kernelType', 'wendlandC2')
+
+            def pack(points: np.ndarray, surface) -> np.ndarray:
+                self.packing = packPoints(points, fixed, s, surface, lambda x, y: np.maximum(field.elevation(x, y), floor),
+                                          smoothingLengthRatio = self.smoothingLengthRatio, kernelType = kernelType,
+                                          backend = 'gpu' if self.backend == 'gpu' else 'numpy')
+                return self.packing.positions
+        fluidPositions, fluidVelocities, fluidPressures = exactSolitaryWaveFluid3D(field, H, d, self.crestX, s, floor,
+                                                                                   bedFitted = self.bedFitted,
+                                                                                   jitter = self.startJitter,
+                                                                                   seed = self.startSeed, pack = pack)
         self.particles = ParticleSystem.assemble(fluidPositions, self.boundary.positions(), s, rho, fluidVelocities)
 
         # `BreakingWave`'s deltaSph scheme (see its build for the reasons behind each setting)
@@ -317,7 +389,7 @@ class BreakingWave3D:
         p.pressures = taitEquationOfState(p.densities, rho, soundSpeed)
 
         self.trackers = {y: BreakingTracker(field.section(y), s, faceReach = d, searchFromX = self.searchFromX,
-                                            faceMeasure = 'contour') for y in self.sections}
+                                            faceMeasure = 'contour', faceArc = self.faceArc) for y in self.sections}
         self.sectionFrames = {y: [] for y in self.sections}
         self.snapshots = {}
         self._recordSections()

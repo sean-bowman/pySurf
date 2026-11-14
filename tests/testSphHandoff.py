@@ -5,7 +5,7 @@
 
 Tests of pysurf.sphHandoff and pysurf.SplashUp: still water hands off at rest with hydrostatic
 pressure on the fluid and the boundary alike, a plunging surface is filled with particles that
-leave the tube under the jet empty, the piston reads the flow behind it as a wave translating
+leave the tube under the jet empty, bed-fitted seeds stand half a spacing above a slope, the piston reads the flow behind it as a wave translating
 unchanged, the depth-averaged velocity of a solitary wave is c eta / (d + eta), and a short
 splash-up from a solitary wave builds, runs, keeps its particles and writes a GIF.
 
@@ -25,8 +25,8 @@ from pysurf.bemSolver import FlowField
 from pysurf.errors import InvalidInputError
 from pysurf.OverturningWave import OverturningWave
 from pysurf.sphBoundaries import BedBoundary
-from pysurf.sphHandoff import (PistonDrive, boundaryPressure, columnVelocity, nearestSurfacePoint, seedWater,
-                               windowBathymetry)
+from pysurf.sphHandoff import (PistonDrive, boundaryPressure, clearSurface, columnVelocity, nearestSurfacePoint, seedStillWater,
+                               seedWater, windowBathymetry)
 from pysurf.SplashUp import SplashUp
 
 def stillTank(width: float = 4.0, depth: float = 1.0, nodes: int = 80) -> tuple:
@@ -75,6 +75,83 @@ def testAPlungingSurfaceIsFilledAndItsTubeLeftEmpty():
     assert not np.any(radius < 0.15 - 0.01)
     assert np.count_nonzero((radius > 0.16) & (radius < 0.24) & (fluid[:, 1] > 1.25)) > 50
     assert np.min(nearestSurfacePoint(surface, fluid)[0]) >= 0.25 * 0.02 - 1e-12
+
+def testBedFittedSeedsStandHalfASpacingAboveASlope():
+
+    # Still water over a bed flat to x = 2, then 1:8, both as the potential flow's tank and as a window beyond it
+    spacing = 0.05
+    x = np.linspace(0.0, 4.0, 81)
+    bedLine = np.maximum(x - 2.0, 0.0) / 8.0
+    field = FlowField(np.column_stack([x, np.ones_like(x)]), np.zeros_like(x), np.column_stack([x, bedLine]), 0.05, 1.0)
+    bed = Bathymetry([0.0, 2.0, 4.0], [0.0, 0.0, 0.25], 1.0)
+
+    def gaps(points: np.ndarray) -> np.ndarray:
+        columns, inverse = np.unique(points[:, 0], return_inverse = True)
+        lowest = np.full(columns.size, np.inf)
+        np.minimum.at(lowest, inverse, points[:, 1])
+        return lowest - bed.elevation(columns)
+
+    for fitted, lattice in ((seedWater(field, bed, spacing, bedFitted = True), seedWater(field, bed, spacing)),
+                            (seedStillWater(bed, spacing, -1.0, bedFitted = True), seedStillWater(bed, spacing, -1.0))):
+        assert gaps(fitted) == pytest.approx(0.5 * spacing)
+        assert gaps(lattice).max() > spacing
+        # The same points over the flat bed, and water up to still water level only
+        flatFitted, flatLattice = fitted[fitted[:, 0] < 2.0], lattice[lattice[:, 0] < 2.0]
+        assert flatFitted[np.lexsort(flatFitted.T[::-1])] == pytest.approx(flatLattice[np.lexsort(flatLattice.T[::-1])],
+                                                                             abs = 1e-12)
+        assert np.all(fitted[:, 1] < 1.0)
+
+def testJitteredSeedsStayInTheWater():
+
+    '''
+
+    The plunging surface of the tube test and still water over a slope, seeded in bed-fitted
+    columns and moved by up to 0.15 spacings: as many points as the ordered seeds, none in the tube
+    or above the surface, all half a spacing or more above the bed.
+
+    '''
+
+    outer = np.radians(np.linspace(160.0, -20.0, 73))
+    inner = np.radians(np.linspace(-20.0, 270.0, 117))
+    back = np.column_stack([np.linspace(0.0, 4.265, 120, endpoint = False), np.linspace(1.0, 1.335, 120, endpoint = False)])
+    jet = np.column_stack([4.5 + 0.25 * np.cos(outer), 1.25 + 0.25 * np.sin(outer)])
+    tube = np.column_stack([4.5 + 0.15 * np.cos(inner), 1.25 + 0.15 * np.sin(inner)])
+    face = np.column_stack([np.linspace(4.5, 8.0, 101)[1:], np.linspace(1.1, 1.0, 101)[1:]])
+    surface = np.vstack([back, jet, tube, face])
+    field = FlowField(surface, np.zeros(len(surface)), np.column_stack([np.linspace(0.0, 8.0, 81), np.zeros(81)]), 0.1, 1.0)
+    flat = Bathymetry([0.0, 8.0], [0.0, 0.0], 1.0)
+    ordered = seedWater(field, flat, 0.02, bedFitted = True)
+    moved = seedWater(field, flat, 0.02, bedFitted = True, jitter = 0.15, seed = 4)
+
+    assert len(moved) == len(ordered)
+    assert np.all(field.inside(moved))
+    assert not np.any(np.hypot(moved[:, 0] - 4.5, moved[:, 1] - 1.25) < 0.15 - 0.01)
+    assert np.all(moved[:, 1] >= 0.5 * 0.02 - 1e-12)
+    assert np.count_nonzero(np.all(moved == ordered, axis = 1)) < 0.05 * len(ordered)
+
+    sloping = Bathymetry([0.0, 2.0, 4.0], [0.0, 0.0, 0.25], 1.0)
+    still = seedStillWater(sloping, 0.05, -1.0, bedFitted = True)
+    stillMoved = seedStillWater(sloping, 0.05, -1.0, bedFitted = True, jitter = 0.15, seed = 4)
+    assert len(stillMoved) == len(still)
+    assert np.all(stillMoved[:, 1] < 1.0)
+    assert np.all(stillMoved[:, 1] >= sloping.elevation(stillMoved[:, 0]) + 0.5 * 0.05 - 1e-12)
+
+def testPointsNearTheSurfaceMoveInToTheClearance():
+
+    '''
+
+    Under a flat surface at z = 1, points closer than a quarter spacing to it move straight down
+    to a quarter spacing below it; points deeper keep their places.
+
+    '''
+
+    surface = np.column_stack([np.linspace(0.0, 4.0, 41), np.ones(41)])
+    points = np.array([[1.03, 0.999], [2.07, 0.99], [3.01, 0.9], [1.55, 0.5]])
+    cleared = clearSurface(surface, points, 0.1)
+
+    assert cleared[:2] == pytest.approx(np.array([[1.03, 0.975], [2.07, 0.975]]), abs = 1e-12)
+    assert np.all(cleared[2:] == points[2:])
+    assert len(clearSurface(surface, np.zeros((0, 2)), 0.1)) == 0
 
 def testThePistonReadsTheFlowBehindAsATranslatingWave():
 

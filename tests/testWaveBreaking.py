@@ -289,6 +289,44 @@ def testTheContourFaceReadsTheSlopeOfTheFace(face, slope):
     # The face built at x = 1 - 0.5 (z - SWL), 1 and 1 to 1.3 for the lip, between z = SWL and SWL + 0.4
     assert 0.75 < result.faceX < 1.35
 
+def testALongerArcReadsTheFaceAndNotAStepInIt():
+
+    '''
+
+    A plane face sloping back reads the same slope over two and six spacings of arc. Three rows
+    ending at one x make a vertical step three particles high on a face sloping back at dx/dz =
+    -0.6: over two spacings it reads within 0.05 of vertical, over six, the kernel's support at
+    h = 3 spacings, above 0.2.
+
+    '''
+
+    plane = crestWithFace(lambda z: 1.0 - 0.5 * (z - swl))
+    for arc in (2.0, 6.0):
+        result = contourFace(plane, s, 0.5, flatBed, reach = 1.0, windowDepth = 0.1, arcLength = arc)
+        assert result.slope == pytest.approx(0.5 / np.sqrt(1.25), abs = 0.02)
+
+    low, high = swl + 0.15, swl + 0.15 + 3.0 * s
+    held = 1.0 - 0.6 * (low - swl)
+
+    def stepped(z: np.ndarray) -> np.ndarray:
+        # Back at dx/dz = -0.6, held at one x through the step, then back again from there
+        return np.where(z < low, 1.0 - 0.6 * (z - swl), np.where(z < high, held, held - 0.6 * (z - high)))
+
+    positions = crestWithFace(stepped)
+    short = contourFace(positions, s, 0.5, flatBed, reach = 1.0, windowDepth = 0.1, arcLength = 2.0)
+    long = contourFace(positions, s, 0.5, flatBed, reach = 1.0, windowDepth = 0.1, arcLength = 6.0)
+
+    assert abs(short.slope) < 0.05
+    assert long.slope > 0.2
+    # The step sits at x = 0.91
+    assert short.faceX == pytest.approx(held, abs = 2.0 * s) and long.faceX == pytest.approx(held, abs = 2.0 * s)
+
+    # The tracker reads the face over its own arc
+    for arc, check in ((2.0, lambda slope: abs(slope) < 0.05), (6.0, lambda slope: slope > 0.2)):
+        tracker = BreakingTracker(flatBed, s, faceReach = 1.0, faceMeasure = 'contour', faceArc = arc)
+        tracker.update(1.0, positions)
+        assert check(tracker.faceSlope[-1])
+
 def testTheContourFaceReadsAFaceInShallowWater():
 
     '''

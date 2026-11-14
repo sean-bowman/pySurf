@@ -36,35 +36,42 @@ every time by sqrt(d / g), is the same at any depth.
 
 The 'deltaSph' scheme, with its limited artificial viscosity, measured on the GPU backend against
 the phase 1 criteria of planning/gpuSphRoadmap.md, set before the runs except the still tank's; the
-runs are scripted there, not yet in the test suite:
+runs are scripted there, not yet in the test suite. The slope cases start from bed-fitted columns
+(`bedFitted`), the default:
 
-Validated: the breaking point. Against Grilli et al. (1997) for H/d = 0.3 on a 1:35 slope, Hb/d =
-0.476 and hb/d = 0.345 (tabulated in Table 8 of Senthilkumar 2016, arXiv:1601.06822), the model
-breaks at Hb/d = 0.514, 0.486 and 0.478 (+7.9, +2.1, +0.3 percent) and hb/d = 0.318, 0.352 and 0.355
-(-7.9, +2.1, +2.9 percent) at 32, 64 and 128 particles per depth, inside the criteria of 10 and 15
-percent. Before the slope the exact solitary wave of H/d = 0.3 loses 0.42 percent of its height over
-29 depths of flat bed at 32 particles per depth and 0.76 at 64, inside 2 percent.
+Validated at 64 and 128 particles per depth: the breaking point. Against Grilli et al. (1997) for
+H/d = 0.3 on a 1:35 slope, Hb/d = 0.476 and hb/d = 0.345 (tabulated in Table 8 of Senthilkumar 2016,
+arXiv:1601.06822), the model breaks at Hb/d = 0.486, 0.496 and 0.484 (+2.1, +4.3, +1.6 percent) and
+hb/d = 0.278, 0.316 and 0.335 (-19.5, -8.4, -2.8 percent) at 32, 64 and 128 particles per depth,
+against criteria of 10 and 15 percent: at 32 the wave breaks too far up the slope. The breaking
+depth converges at first order, and Richardson extrapolation of the three estimates hb/d = 0.355
+(+3.0 percent). From the square lattice's start (`bedFitted = False`) the wave breaks earlier and
+deeper, at hb/d = 0.318, 0.352 and 0.355, inside the criteria at all three, and extrapolates to the
+same depth. Before the slope the exact solitary wave of H/d = 0.3 loses 0.42 percent of its height
+over 29 depths of flat bed at 32 particles per depth and 0.76 at 64, inside 2 percent.
 
 Validated at 128 particles per depth: the overturn at touchdown. On the Surf Ranch soliton (H/d =
-0.6, 0.0693 reef face) against Feddersen et al.'s (2024) DNS, run from the start, the jet lands 0.08
-d short of the DNS's impact point, and the height (+0.8 percent), overturn area (-8), jet area (-18,
-against a criterion of 20) and overturn angle (-2.1 degrees) pass. Four of the five pass at 32 and
-64: the jet lands 0.76 d long at 32, and the jet area is 24 percent small at 64. The areas do not
-converge monotonically (overturn 0.314, 0.366 and 0.325 H^2, jet 0.214, 0.167 and 0.180, against
-0.352 and 0.220), so the pass holds at 128 and is not a converged result. The wave breaks 2.5 and
-0.9 percent below the boundary element model's height at 64 and 128 and lands 0.09 and 0.06 s after
-it.
+0.6, 0.0693 reef face) against Feddersen et al.'s (2024) DNS, run from the start, the jet lands 0.04
+d short of the DNS's impact point, and the height (-0.9 percent), overturn area (-3), jet area (-11.5,
+against a criterion of 20) and overturn angle (-3.6 degrees) pass. At 64 four pass; the overturn
+angle, 5.2 degrees low, fails by 0.2. At 32 only the jet area passes: the jet lands 0.88 d long and
+11 percent low over a tube 40 percent too large. The overturn area does not converge monotonically
+(0.495, 0.308 and 0.341 H^2, against 0.352), so the pass holds at 128 and is not a converged result.
+The wave breaks 2.5 and 2.1 percent below the boundary element model's height at 64 and 128 and
+lands 0.12 and 0.04 s after it. From the square lattice's start four of the five pass at 32 and 64
+and all five at 128.
 
 Not validated: the surface before impact and what follows the touchdown. 0.1 sqrt(d / g) before the
-boundary element impact the two surfaces lie up to 10, 13 and 19 spacings apart at 32, 64 and 128
-particles per depth, all of it along the jet, against a criterion of 2. The energy lost in active
-breaking on a 3 degree beach is 0.14 of the energy at breaking at 64 particles per depth, against
-Mostert and Deike's 0.31: 54 percent short of a 30 percent criterion; at 32 the smoothed surface
-gives no breaking point on that beach. The scheme models no turbulence. The plain artificial
-viscosity's dissipation stood in for part of it (0.20 and 0.17 at 32 and 64), and continued from the
-boundary element model's jet (`SplashUp`'s hand-off, plain term) the scheme loses 0.23 and 0.18,
-where the hand-off with the Shepard scheme loses 0.30 at 48: the shortfall is the dissipation after
-the jet lands, not the jet.
+boundary element impact, the boundary element surface lies up to 11, 15 and 14 spacings from the
+particles' at 32, 64 and 128 particles per depth, against a criterion of 2. The energy lost in
+active breaking on a 3 degree beach is 0.20 and 0.17 of the energy at breaking at 32 and 64
+particles per depth, against Mostert and Deike's 0.31: 35 and 47 percent short of a 30 percent
+criterion, and further off at the finer spacing. The scheme models no turbulence. Continued from
+the boundary element model's jet (`SplashUp`'s hand-off, plain term) the scheme loses 0.23 and
+0.18, where the hand-off with the Shepard scheme loses 0.30 at 48: the shortfall is the dissipation
+after the jet lands, not the jet.
+
+The next two paragraphs were measured from the square lattice's start.
 
 The artificial viscosity. Monaghan's term acts on the crest's smooth strain as a viscosity of about
 alpha c0 h / 8, which halves with the spacing, and the plunging lip is made of the top 0.03 d of the
@@ -91,6 +98,28 @@ A tank of still water, after 20 sqrt(d / g), keeps an rms speed of 7.1×10^-4 sq
 of 3.2×10^-3 at 60 particles per depth, inside a criterion of 10^-3 on the rms and 10^-2 on the
 fastest; at 30 the rms reaches 1.4×10^-3. That criterion replaced one of 10^-3 on the fastest
 particle after the runs, which every setting failed.
+
+Not validated: a jittered start (`startJitter`, 0 by default). Moved off bed-fitted columns by up to
+0.15 spacings and read over six spacings of arc, the slope cases pass where the columns' do and at
+two more: Grilli's breaking point at 32 particles per depth (Hb/d +6.2 to +9.3 percent, hb/d -13.7
+to -14.7 over three seeds; -4.9 and -1.2 percent at 64 and 128) and the overturn angle at 64 (-3.7
+degrees, all five criteria passing). Its particles never come to rest: the still tank keeps an rms
+speed of 1.3×10^-2 and 9.8×10^-3 sqrt(g d) at 30 and 60 particles per depth, ten times the
+criterion, and fails at both.
+
+Not validated: a packed start (`startPacking`, False by default). Packing the 0.15-spacing jitter
+returns the particles most of the way to their columns: the structure factor at the columns'
+wavenumber rises from 0.74 of the particle count to 0.85 to 0.97 (1 on the columns). From it the
+slope cases read as from the columns: Grilli's breaking point fails at 32 particles per depth
+(hb/d -19.9 to -20.3 percent over three seeds) and passes at 64 and 128 (-7.0 and -2.4), and the
+overturn passes four criteria at 64 and 128, the angle failing at 64 (-5.6 degrees) and the jet
+area at 128 (-20.2 percent). The particles come to rest: the still tank passes at 60 particles per
+depth (rms 6.6×10^-4 and 5.6×10^-4 sqrt(g d) on two seeds) and fails at 30. The solitary wave
+loses 1.34 and 0.81 percent of its height at 32 and 64, against 0.50 and 0.76 from the columns.
+A jitter of 0.45 spacings, packed, keeps less of the order and also comes to rest. On the ridge's
+centre line it breaks no earlier than the packed 0.15 jitter at 64 particles per depth, where the
+unpacked jitter breaks 0.05 to 0.09 sqrt(d / g) earlier, and recovers about half the jitter's gain
+at 32 (one seed): the jittered start's earlier breaking goes mostly with its particles' motion.
 
 The 'shepard' scheme:
 
@@ -140,7 +169,8 @@ from pysurf.bathymetry import Bathymetry
 from pysurf.bemSolver import FlowField, JetGeometry, jetGeometry
 from pysurf.errors import InvalidInputError, NumericalInstabilityError
 from pysurf.sphBoundaries import BedBoundary
-from pysurf.sphHandoff import boundaryPressure, seedStillWater, seedWater
+from pysurf.sphHandoff import boundaryPressure, clearSurface, seedStillWater, seedWater
+from pysurf.sphPacking import PackingResult, packPoints
 from pysurf.sphParticles import ParticleSystem
 from pysurf.sphRefinement import refinementLevels
 from pysurf.sphSolver import SimulationConfig, WcsphSolver, taitDensity, taitEquationOfState
@@ -148,9 +178,15 @@ from pysurf.validation import applyRules, choiceRule, integerRule, numericRule
 from pysurf.waveBreaking import BreakingTracker
 from pysurf.waveMakers import exactSolitaryBoundaryPressure, exactSolitaryWaveFluid, solitaryWaveFluid
 
-# h / s and the artificial viscosity each scheme takes unless they are given
+# h / s, the artificial viscosity, the start's random offset in spacings and whether the start is
+# packed, each scheme's unless given
 defaultSmoothingRatio = {'shepard': 1.3, 'deltaSph': 3.0}
 defaultViscosity = {'shepard': 0.02, 'deltaSph': 0.01}
+defaultJitter = {'shepard': 0.0, 'deltaSph': 0.0}
+defaultPacking = {'shepard': False, 'deltaSph': False}
+
+# The arc in spacings the face slope is read over, for a start on its lattice and one jittered off it
+latticeFaceArc, jitteredFaceArc = 2.0, 6.0
 
 # Inputs a breaking wave must satisfy before anything is built
 inputRules = (
@@ -165,6 +201,10 @@ inputRules = (
     numericRule('smoothingLengthRatio', 'Smoothing length over spacing', minimum = 1.0, maximum = 4.0),
     choiceRule('backend',            'Solver backend',      choices = ('numpy', 'compiled', 'gpu')),
     choiceRule('startingWave',       'Starting wave',       choices = ('exact', 'serre', 'still')),
+    numericRule('startJitter',       'Start jitter',        minimum = 0.0, exclusiveMinimum = False, maximum = 0.5,
+                exclusiveMaximum = True, note = 'two neighbors moved half a spacing toward each other would meet'),
+    numericRule('faceArc',           'Face slope arc',      units = 'spacings', minimum = 1.0, exclusiveMinimum = False,
+                maximum = 12.0, exclusiveMaximum = False),
 )
 
 # The crest-following refinement zone: splits, reach behind and ahead of the crest and floor over
@@ -259,14 +299,40 @@ class BreakingWave:
         inside the water the boundary element solution gives (`bemSolver.FlowField`). The second
         starts both models from one state, as a comparison between them needs; at H/d = 0.6 it
         carries 17 percent more water than the exact wave of the same height. 'still' starts the
-        same tank with still water on the same lattice, at rest and hydrostatic: the reference
-        run whose drift `energyHistory` takes out of a wave's energies.
+        same tank with still water laid the same way (`bedFitted`), at rest and hydrostatic: the
+        reference run whose drift `energyHistory` takes out of a wave's energies.
     refinement : dict | None
         Split the fluid in a zone that follows the crest (`WcsphSolver.refine`, keeping h): 'levels',
         how many times a particle there splits (1 to 3); 'behind' and 'ahead', the zone's reach
         from the tracked crest along x, and 'above', its floor over still water, in depths; 'fromX',
         the crest position the zone starts at [m], the toe by default. Applied at every breaking
         check; daughters stay split when the zone moves on. None for a uniform spacing.
+    bedFitted : bool | None
+        Lay the starting water in columns half a spacing clear of the bed
+        (`sphParticles.bedFittedPoints`) rather than on the square lattice, whose lowest particles
+        sit half a spacing to one and a half above a slope and fall into those steps from rest.
+        Only the 'deltaSph' scheme lays bed-fitted columns. None takes the scheme's: bed-fitted
+        columns for 'deltaSph', the lattice for 'shepard'
+    startJitter : float | None
+        Move each starting particle off its place by a seeded uniform random offset of up to this
+        many spacings along each axis, reflected back into the water, with the start's flow and
+        pressure at its final place (`sphParticles.jitterPoints`); 0 for none. A jitter of 0.15
+        spacings keeps most of the columns' order and leaves the particles moving: the still tank
+        fails, and the slope cases break earlier, on the ridge's centre line mostly from that
+        motion. Only the 'deltaSph' scheme jitters its start. None takes the scheme's, 0 for both
+    startSeed : int
+        Seed of the start's random offsets
+    startPacking : bool | None
+        Relax the laid start before its flow and pressure are set (`sphPacking.packPoints`): each
+        particle moves down the gradient of its kernel sum, between the boundary's fixed particles
+        and below the starting surface, until that gradient, which sets the SPH pressure sum's
+        error in water at rest, falls to 1e-4 / h in rms. A start jittered by 0.15 spacings packs
+        most of the way back to its columns; a start on its lattice barely moves. Only the
+        'deltaSph' scheme packs its start. None takes the scheme's, False for both
+    faceArc : float | None
+        For the 'deltaSph' scheme, the arc the face slope is read over, in spacings
+        (`waveBreaking.contourFace`); None for 2 when the start lies on its lattice and 6, the
+        kernel's support, when it is jittered, whose surface is rough at the particles' scale
 
     '''
 
@@ -276,7 +342,9 @@ class BreakingWave:
                  runupAllowance: float = 0.8, endTime: float | None = None, scheme: str = 'shepard',
                  smoothingLengthRatio: float | None = None, backend: str = 'numpy',
                  solverOptions: dict | None = None, bathymetry: Bathymetry | None = None,
-                 startX: float | None = None, startingWave: str = 'exact', refinement: dict | None = None) -> None:
+                 startX: float | None = None, startingWave: str = 'exact', refinement: dict | None = None,
+                 bedFitted: bool | None = None, startJitter: float | None = None, startSeed: int = 1,
+                 faceArc: float | None = None, startPacking: bool | None = None) -> None:
 
         self.depth = depth                          # [m]
         self.waveHeight = waveHeight                # [m]
@@ -295,6 +363,12 @@ class BreakingWave:
         self.startX = startX                        # [m]
         self.startingWave = startingWave
         self.refinement = ({**refinementDefaults, **refinement} if refinement is not None else None)
+        self.bedFitted = bool(bedFitted) if bedFitted is not None else scheme == 'deltaSph'
+        self.startJitter = float(startJitter if startJitter is not None else defaultJitter.get(scheme, 0.0))
+        self.startSeed = int(startSeed)
+        self.startPacking = bool(startPacking) if startPacking is not None else defaultPacking.get(scheme, False)
+        self.faceArc = float(faceArc if faceArc is not None
+                             else jitteredFaceArc if self.startJitter > 0.0 else latticeFaceArc)
 
         # Speed of sound as a multiple of the solitary wave celerity, and simulated time between
         # breaking checks in units of sqrt(d / g)
@@ -307,6 +381,7 @@ class BreakingWave:
         self.solver: WcsphSolver | None = None
         self.tracker: BreakingTracker | None = None
         self.frames: list[WaveFrame] = []
+        self.packing: PackingResult | None = None
         self.wallClockSeconds = 0.0                 # [s]
         self._fluidMass = 0.0                       # [kg/m]
 
@@ -335,6 +410,15 @@ class BreakingWave:
         if self.startingWave != 'exact' and self.scheme != 'deltaSph':
             raise InvalidInputError("Only the 'deltaSph' scheme takes a starting wave other than its own.",
                                     parameterName = 'startingWave', value = self.startingWave)
+        if self.bedFitted and self.scheme != 'deltaSph':
+            raise InvalidInputError("Only the 'deltaSph' scheme lays its start in bed-fitted columns.",
+                                    parameterName = 'bedFitted', value = self.bedFitted)
+        if self.startJitter > 0.0 and self.scheme != 'deltaSph':
+            raise InvalidInputError("Only the 'deltaSph' scheme jitters its start.", parameterName = 'startJitter',
+                                    value = self.startJitter)
+        if self.startPacking and self.scheme != 'deltaSph':
+            raise InvalidInputError("Only the 'deltaSph' scheme packs its start.", parameterName = 'startPacking',
+                                    value = self.startPacking)
         if self.refinement is not None:
             unknown = set(self.refinement) - set(refinementDefaults)
             if unknown:
@@ -453,27 +537,36 @@ class BreakingWave:
             endWallTop = wallTop if self.bathymetry.elevation(endX) < d else None
         self.boundary = BedBoundary(self.bathymetry, s, nLayers = layers, wallTop = wallTop, endWallTop = endWallTop)
 
-        field, tankEnd = None, self.bathymetry.endX
+        field, tankEnd, level = None, self.bathymetry.endX, self.bathymetry.stillWaterLevel
+        laying = dict(bedFitted = self.bedFitted, jitter = self.startJitter, seed = self.startSeed)
+        pack = self._packer()
         if exact and self.startingWave == 'serre':
             field, tankEnd = self._potentialFlowStart()
-            fluidPositions = seedWater(field, self.bathymetry, s)
-            fluidVelocities = field.velocity(fluidPositions)
-            fluidPressures = np.maximum(field.pressure(fluidPositions, fluidVelocities), 0.0) / rho
+            fluidPositions = seedWater(field, self.bathymetry, s, **laying)
             if tankEnd < self.bathymetry.endX - 1e-9:
                 # Past the boundary element tank's end wall the water is still
-                still = seedStillWater(self.bathymetry, s, tankEnd)
-                fluidPositions = np.vstack([fluidPositions, still])
-                fluidVelocities = np.vstack([fluidVelocities, np.zeros_like(still)])
-                fluidPressures = np.concatenate([fluidPressures,
-                                                 constants.gravity * (self.bathymetry.stillWaterLevel - still[:, 1])])
-        elif exact and self.startingWave == 'still':
-            # The lattice `exactSolitaryWaveFluid` lays, below still water
-            fluidPositions = seedStillWater(self.bathymetry, s, self.bathymetry.startX - s)
+                fluidPositions = np.vstack([fluidPositions, seedStillWater(self.bathymetry, s, tankEnd, **laying)])
+            inTank = fluidPositions[:, 0] <= tankEnd
+            if pack is not None:
+                # The two waters pack as one; each point then takes the flow of the water it lies in
+                surface = field.surface
+                fluidPositions = pack(fluidPositions, lambda x: np.interp(x, surface[:, 0], surface[:, 1], right = level))
+                inTank = fluidPositions[:, 0] <= tankEnd
+                fluidPositions[inTank] = clearSurface(surface, fluidPositions[inTank], s)
             fluidVelocities = np.zeros_like(fluidPositions)
-            fluidPressures = constants.gravity * (self.bathymetry.stillWaterLevel - fluidPositions[:, 1])
+            fluidPressures = constants.gravity * (level - fluidPositions[:, 1])
+            fluidVelocities[inTank] = field.velocity(fluidPositions[inTank])
+            fluidPressures[inTank] = np.maximum(field.pressure(fluidPositions[inTank], fluidVelocities[inTank]), 0.0) / rho
+        elif exact and self.startingWave == 'still':
+            # The points `exactSolitaryWaveFluid` lays, below still water
+            fluidPositions = seedStillWater(self.bathymetry, s, self.bathymetry.startX - s, **laying)
+            if pack is not None:
+                fluidPositions = pack(fluidPositions, lambda x: np.full(np.shape(x), level))
+            fluidVelocities = np.zeros_like(fluidPositions)
+            fluidPressures = constants.gravity * (level - fluidPositions[:, 1])
         elif exact:
             fluidPositions, fluidVelocities, fluidPressures = exactSolitaryWaveFluid(self.bathymetry, self.waveHeight,
-                                                                                     self.crestX, s)
+                                                                                     self.crestX, s, pack = pack, **laying)
         else:
             fluidPositions, fluidVelocities = solitaryWaveFluid(self.bathymetry, self.waveHeight, self.crestX, s)
         self.particles = ParticleSystem.assemble(fluidPositions, self.boundary.positions(), s, rho, fluidVelocities)
@@ -527,9 +620,32 @@ class BreakingWave:
 
         # A lean offshore of the toe would be start-up noise, never breaking
         self.tracker = BreakingTracker(self.bathymetry, s, faceReach = d, searchFromX = self.toeX,
-                                       faceMeasure = 'contour' if exact else 'cells')
+                                       faceMeasure = 'contour' if exact else 'cells', faceArc = self.faceArc)
         self.frames = []
         self._recordFrame()
+
+    def _packer(self):
+
+        '''
+
+        The start's packing (`startPacking`) as a function of the laid points and the surface's
+        elevation eta(x), returning the packed points and keeping the result in `packing`; None
+        when the start is not packed.
+
+        '''
+
+        if not self.startPacking:
+            return None
+        fixed = self.boundary.positions()
+        kernelType = self.solverOptions.get('kernelType', 'wendlandC2')
+
+        def pack(points: np.ndarray, surface) -> np.ndarray:
+            self.packing = packPoints(points, fixed, self.spacing, surface, self.bathymetry.elevation,
+                                      smoothingLengthRatio = self.smoothingLengthRatio, kernelType = kernelType,
+                                      backend = 'gpu' if self.backend == 'gpu' else 'numpy')
+            return self.packing.positions
+
+        return pack
 
     def _stillWallPressure(self, positions: np.ndarray) -> np.ndarray:
 
@@ -745,10 +861,23 @@ class BreakingWave:
             'slopeParameter': self.slopeParameter,
             'predictedBreakerType': self.predictedBreakerType,
             'particlesPerDepth': self.particlesPerDepth,
+            'bedFitted': self.bedFitted,
+            'startJitter': self.startJitter,
+            'startSeed': self.startSeed,
+            'startPacking': self.startPacking,
+            'faceArc': self.faceArc,
             'fluidParticles': self.particles.nFluid if self.particles is not None else 0,
             'wallClockSeconds': self.wallClockSeconds,
             'broke': point is not None,
         }
+        if self.packing is not None:
+            result.update({
+                'packingIterations': self.packing.iterations,
+                'packingResidualBefore': self.packing.gradientBefore[0],
+                'packingResidual': self.packing.gradientAfter[0],
+                'packingLargestMove': self.packing.largestMove,
+            'packingFrozen': self.packing.frozen,
+            })
         if point is not None:
             result.update({
                 'breakingTime': point.time,
@@ -814,14 +943,16 @@ class BreakingWave:
         keeps its mass: the still water's, and the excess volume's at still water level. The
         constant is taken at the start, where the wave's is known (`startingWavePotentialEnergy`).
 
-        Weakly compressible water does not keep that constant. The lattice the water starts on
-        leaves the rows over a sloping bed further from it than they settle, and the water
-        compresses under its own weight as it settles, turning potential energy into elastic
-        energy the budget does not count: on a 3 degree beach, 17 percent of the energy of a
-        solitary wave of H/d = 0.3 in the first half second at 32 particles per depth, and 10
-        percent at 64. A run of the same tank
-        from still water (`startingWave = 'still'`) settles the same way, so its kinetic energy
-        and the change in its potential energy, taken out here, leave the wave's.
+        Weakly compressible water does not keep that constant. The square lattice leaves the rows
+        over a sloping bed further from it than they settle; the water falls into those steps and
+        compresses under its own weight, turning potential energy into elastic and kinetic energy
+        the budget does not count: on a 3 degree beach, 17 percent of the energy of a solitary wave
+        of H/d = 0.3 in the first half second at 32 particles per depth, and 10 percent at 64. A
+        run of the same tank from still water (`startingWave = 'still'`), laid the same way,
+        settles the same way, so its kinetic energy and the change in its potential energy, taken
+        out here, leave the wave's. Bed-fitted columns (`bedFitted`) start the water at rest
+        against the bed: on the same beach the still water loses 0.7 and 0.4 percent of that
+        wave's energy in the first half second, and the reference takes out the drift that remains.
 
         Parameters:
         -----------
@@ -835,7 +966,8 @@ class BreakingWave:
 
         Raises:
         -------
-        ValueError : If the reference does not start from still water, or ends before this run.
+        ValueError : If the reference does not start from still water, lays its water differently,
+            or ends before this run.
 
         '''
 
@@ -846,6 +978,10 @@ class BreakingWave:
         if reference is not None:
             if reference.startingWave != 'still':
                 raise ValueError("The reference run must start from still water (startingWave = 'still').")
+            if (reference.bedFitted != self.bedFitted or reference.startJitter != self.startJitter
+                    or reference.startPacking != self.startPacking):
+                raise ValueError('The reference run must lay its water as this run does (bedFitted, startJitter, '
+                                 'startPacking).')
             referenceTimes = np.array([frame.time for frame in reference.frames])
             # Each run overshoots its last frame by up to a step; half a frame is a gap, not a shorter run
             if referenceTimes[-1] < times[-1] - 0.5 * reference.frameInterval:

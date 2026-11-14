@@ -12,7 +12,11 @@ The ways a wave enters an SPH simulation.
                         wave already in motion, with the velocity field that carries it
     exactSolitaryWaveFluid
                         the same under the exact potential flow solitary wave, with its pressure;
-                        `exactSolitaryWaveFluid3D` lays it straight across a 3D bed
+                        `exactSolitaryWaveFluid3D` lays it straight across a 3D bed. Both lay the
+                        particles on the square lattice or, with `bedFitted`, in columns half a
+                        spacing clear of the bed (`sphParticles.bedFittedPoints`); with `jitter`
+                        each particle then moves off its place at random
+                        (`sphParticles.jitterPoints`)
 
 A periodic wave train needs the piston and a long run-in for the generated waves to settle. A
 single solitary wave needs neither: it starts as a wave of permanent form, travels unchanged over
@@ -36,7 +40,9 @@ displacement. It checks the solitary initial condition against its definition: t
 the profile to within the lattice spacing and carry the wave's volume, and the velocity field
 satisfies continuity, the bed condition and the kinematic free-surface condition. The wave it launches is validated against the solitary celerity in
 tests/testValidationSolitary.py. The 3D exact wave over a flat height field matches the 2D one's
-particles, velocities and pressures in every lattice row across the tank.
+particles, velocities and pressures in every lattice row across the tank. A jittered start keeps
+the ordered start's particle count, lies inside the water, and carries the exact flow at each
+particle's final place, in 2D and 3D; `exactSurfaceElevation` matches the surface the flow reads.
 
 Sean Bowman [10/11/2026]
 
@@ -47,6 +53,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass
+from typing import Callable
 
 # Third-party imports
 import numpy as np
@@ -54,7 +61,7 @@ import numpy as np
 # Local imports
 from pysurf import waveTheory
 from pysurf.bathymetry import Bathymetry, HeightField
-from pysurf.sphParticles import ParticleSystem, fillRegion, latticePoints
+from pysurf.sphParticles import ParticleSystem, bedFittedPoints, fillRegion, jitterPoints, latticePoints
 
 #----------------------------------------------------------------------#
 # -- Piston Wave Maker -- #
@@ -295,8 +302,26 @@ def solitaryWaveFluid(bathymetry: Bathymetry, height: float, crestX: float, spac
 
     return positions, velocities
 
-def exactSolitaryWaveFluid(bathymetry: Bathymetry, height: float, crestX: float,
-                           spacing: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def exactSurfaceElevation(x: np.ndarray, height: float, depth: float, crestX: float) -> np.ndarray:
+
+    '''
+
+    The exact solitary wave's surface above still water at positions x [m], read as
+    `waveTheory.exactSolitaryFlow` reads it (its third return) without evaluating the flow: along
+    the conformal map's top level, and zero beyond the wave's interval.
+
+    '''
+
+    levelX, levelY, _, _ = waveTheory.exactSolitaryInterior(round(height / depth, 15))
+    xq = (np.asarray(x, dtype = float) - crestX) / depth
+    surface = np.interp(xq, levelX[-1], levelY[-1])
+    still = (xq <= levelX[:, 0].max()) | (xq >= levelX[:, -1].min())
+
+    return np.where(still, 0.0, surface) * depth
+
+def exactSolitaryWaveFluid(bathymetry: Bathymetry, height: float, crestX: float, spacing: float,
+                           bedFitted: bool = False, jitter: float = 0.0, seed: int = 1,
+                           pack: Callable | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
     '''
 
@@ -304,9 +329,15 @@ def exactSolitaryWaveFluid(bathymetry: Bathymetry, height: float, crestX: float,
     and pressures (`waveTheory.exactSolitaryFlow`).
 
     Lattice points are kept from half a spacing above the bed up to the wave's free surface, as in
-    `solitaryWaveFluid`. The velocity is the fully nonlinear wave's, from its conformal map, and the
-    pressure is unsteady Bernoulli's for a wave of permanent form, so the water starts in the state
-    the wave carries rather than settling into it from a hydrostatic one. The flow is that of a flat
+    `solitaryWaveFluid`; with `bedFitted`, the points of `sphParticles.bedFittedPoints` instead,
+    whose lowest point sits half a spacing above the bed in every column, so the bed's pressure
+    holds the water over a slope from the start. With `jitter`, every point then moves off its
+    place at random (`sphParticles.jitterPoints`), reflected back into the water across the walls,
+    the line half a spacing above the bed and the wave's surface; with `pack`, the points then
+    move as it moves them (`sphPacking.packPoints`). The velocity is the fully
+    nonlinear wave's, from its conformal map, and the pressure is unsteady Bernoulli's for a wave
+    of permanent form, both at each particle's final place, so the water starts in the state the
+    wave carries rather than settling into it from a hydrostatic one. The flow is that of a flat
     bed of the depth at the crest; the crest should sit over the flat part with the wave clear of
     any slope.
 
@@ -320,6 +351,17 @@ def exactSolitaryWaveFluid(bathymetry: Bathymetry, height: float, crestX: float,
         Crest position [m]
     spacing : float
         Lattice spacing [m]
+    bedFitted : bool
+        Lay the particles in bed-fitted columns rather than on the square lattice
+    jitter : float
+        Largest random offset of each particle from its place along each axis, in spacings; zero
+        for none
+    seed : int
+        Seed of the offsets
+    pack : Callable | None
+        Moves the laid points before the flow is evaluated: called with the points and the
+        surface's elevation eta(x) [m], it returns the points' new places (`BreakingWave`'s
+        `startPacking`); None leaves them
 
     Returns:
     --------
@@ -339,7 +381,17 @@ def exactSolitaryWaveFluid(bathymetry: Bathymetry, height: float, crestX: float,
 
     lower = [bathymetry.startX, float(np.min(bathymetry.z))]
     upper = [bathymetry.endX, level + height + spacing]
-    positions = fillRegion(inside, lower, upper, spacing)
+    if bedFitted:
+        candidates = bedFittedPoints(lower, upper, spacing, bathymetry.elevation)
+        positions = candidates[inside(candidates)]
+    else:
+        positions = fillRegion(inside, lower, upper, spacing)
+    surface = lambda x: level + exactSurfaceElevation(x, height, depth, crestX)
+    if jitter > 0.0:
+        positions = jitterPoints(positions, spacing, jitter, seed, [bathymetry.startX], [bathymetry.endX],
+                                 bathymetry.elevation, surface)
+    if pack is not None:
+        positions = pack(positions, surface)
     velocities, pressures, _ = waveTheory.exactSolitaryFlow(positions, height, depth, crestX, level)
 
     return positions, velocities, np.maximum(pressures, 0.0)
@@ -386,7 +438,8 @@ def exactFlowInChunks(points: np.ndarray, height: float, depth: float, crestX: f
     return velocities, pressures, surface
 
 def exactSolitaryWaveFluid3D(field: HeightField, height: float, depth: float, crestX: float, spacing: float,
-                             floor: float | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+                             floor: float | None = None, bedFitted: bool = False, jitter: float = 0.0,
+                             seed: int = 1, pack: Callable | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
     '''
 
@@ -395,9 +448,15 @@ def exactSolitaryWaveFluid3D(field: HeightField, height: float, depth: float, cr
 
     The wave is `exactSolitaryWaveFluid`'s, the flow of a flat bed `depth` deep, the same in every
     vertical (x, z) plane. Lattice points inside the field's bounds are kept from half a spacing
-    above the bed up to the wave's surface; the spanwise velocity is zero. Where the bed rises
-    under the wave the flow does not meet the bed's slope, as in the boundary element model's
-    exact start, which takes the same flat-bed wave over a slope.
+    above the bed up to the wave's surface; with `bedFitted`, the points of
+    `sphParticles.bedFittedPoints` instead, half a spacing above the bed in every column. With
+    `jitter`, every point then moves off its place at random along x, y and z
+    (`sphParticles.jitterPoints`), reflected back into the water across the side and end walls,
+    the line half a spacing above the bed and the wave's surface; with `pack`, the points then move
+    as it moves them (`sphPacking.packPoints`). Either way the flow is evaluated at each point's
+    final place. The spanwise velocity is zero. Where the bed rises under the wave the flow
+    does not meet the bed's slope, as in the boundary element model's exact start, which takes the
+    same flat-bed wave over a slope.
 
     Parameters:
     -----------
@@ -413,6 +472,17 @@ def exactSolitaryWaveFluid3D(field: HeightField, height: float, depth: float, cr
         Lattice spacing [m]
     floor : float | None
         The level the lattice's heights are counted from [m]; None for the bed's lowest point
+    bedFitted : bool
+        Lay the particles in bed-fitted columns rather than on the square lattice
+    jitter : float
+        Largest random offset of each particle from its place along each axis, in spacings; zero
+        for none
+    seed : int
+        Seed of the offsets
+    pack : Callable | None
+        Moves the laid points before the flow is evaluated: called with the points and the
+        surface's elevation eta(x, y) [m], it returns the points' new places (`BreakingWave3D`'s
+        `startPacking`); None leaves them
 
     Returns:
     --------
@@ -424,6 +494,37 @@ def exactSolitaryWaveFluid3D(field: HeightField, height: float, depth: float, cr
     s, level = spacing, field.stillWaterLevel
     floor = field.lowestElevation() if floor is None else floor
     startX, endX, startY, endY = field.bounds
+
+    if jitter > 0.0 or pack is not None:
+        # Every point moves, so the flow is evaluated at each one rather than once per (x, z)
+        upper = [endX, endY, level + height + s]
+        if bedFitted:
+            points = bedFittedPoints([startX, startY, floor], upper, s, field.elevation)
+        else:
+            points = latticePoints([startX, startY, floor], upper, s)
+            # The tolerance keeps the lattice row exactly half a spacing above a flat bed
+            points = points[points[:, 2] >= field.elevation(points[:, 0], points[:, 1]) + (0.5 - 1e-9) * s]
+        points = points[points[:, 2] < level + exactSurfaceElevation(points[:, 0], height, depth, crestX)]
+        surface = lambda x, y: level + exactSurfaceElevation(x, height, depth, crestX)
+        points = jitterPoints(points, s, jitter, seed, [startX, startY], [endX, endY],
+                              lambda x, y: np.maximum(field.elevation(x, y), floor), surface)
+        if pack is not None:
+            points = pack(points, surface)
+        velocities, pressures, _ = exactFlowInChunks(points[:, [0, 2]], height, depth, crestX, level)
+        flow = np.column_stack([velocities[:, 0], np.zeros(len(points)), velocities[:, 1]])
+        return points, flow, np.maximum(pressures, 0.0)
+
+    if bedFitted:
+        # Each column's heights follow its own bed, so the flow is evaluated at every distinct
+        # (x, z); over a bed flat across y the rows share theirs
+        points = bedFittedPoints([startX, startY, floor], [endX, endY, level + height + s], s, field.elevation)
+        planar, inverse = np.unique(points[:, [0, 2]], axis = 0, return_inverse = True)
+        velocities, pressures, surface = exactFlowInChunks(planar, height, depth, crestX, level)
+        inverse = inverse.reshape(-1)
+        wet = points[:, 2] < level + surface[inverse]
+        index = inverse[wet]
+        flow = np.column_stack([velocities[index, 0], np.zeros(len(index)), velocities[index, 1]])
+        return points[wet], flow, np.maximum(pressures[index], 0.0)
 
     # The flow on one (x, z) plane of the lattice, then that plane laid at every row across
     plane = latticePoints([startX, floor], [endX, level + height + s], s)

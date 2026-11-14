@@ -13,7 +13,9 @@ central difference once the ramp is complete.
 The solitary initial condition is checked against its definition: the particles fill the profile to
 within the lattice spacing, their count carries the still water plus the wave volume 2 H / kappa,
 and the velocity field satisfies continuity (du/dx + dw/dy = 0), the bed condition (w = 0) and the
-kinematic surface condition (w = u eta_x + eta_t with eta_t = -c eta_x).
+kinematic surface condition (w = u eta_x + eta_t with eta_t = -c eta_x). The exact wave laid in
+bed-fitted columns stands half a spacing above a slope in every column and is the lattice's wave
+over the flat bed.
 
 Sean Bowman [10/11/2026]
 
@@ -27,7 +29,8 @@ import pytest
 from pysurf import constants, waveTheory
 from pysurf.bathymetry import Bathymetry
 from pysurf.sphParticles import ParticleSystem
-from pysurf.waveMakers import PistonWaveMaker, WaveMakerConfig, solitaryWaveFluid, solitaryWaveVelocityField
+from pysurf.waveMakers import (PistonWaveMaker, WaveMakerConfig, exactSolitaryWaveFluid, exactSurfaceElevation,
+                               solitaryWaveFluid, solitaryWaveVelocityField)
 
 #----------------------------------------------------------------------#
 # -- Piston -- #
@@ -171,3 +174,86 @@ def testTheFluidCarriesTheWaveVolume():
     columns = (bed.endX - bed.startX) / spacing
 
     assert abs(len(positions) * spacing**2 - expected) < columns * spacing**2
+
+def testABedFittedExactWaveStandsHalfASpacingAboveTheSlope():
+
+    # Flat to x = 4, then 1:15; the crest over the flat part
+    bed = Bathymetry([0.0, 4.0, 10.0], [0.0, 0.0, 0.4], stillWaterLevel = 1.0)
+    spacing = 1.0 / 16.0
+    fitted = exactSolitaryWaveFluid(bed, 0.3, 2.5, spacing, bedFitted = True)
+    lattice = exactSolitaryWaveFluid(bed, 0.3, 2.5, spacing)
+
+    def lowest(points: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        columns, inverse = np.unique(points[:, 0], return_inverse = True)
+        bottom = np.full(columns.size, np.inf)
+        np.minimum.at(bottom, inverse, points[:, 1])
+        return columns, bottom - bed.elevation(columns)
+
+    _, fittedGap = lowest(fitted[0])
+    _, latticeGap = lowest(lattice[0])
+    assert fittedGap == pytest.approx(0.5 * spacing)
+    # The lattice's lowest row stands up to one and a half spacings over the slope
+    assert latticeGap.max() > spacing and latticeGap.min() >= 0.5 * spacing - 1e-9
+
+    # Over the flat bed the two are the same particles, flow and pressure
+    def flatPart(start: tuple) -> list:
+        positions, velocities, pressures = start
+        keep = positions[:, 0] < 4.0
+        order = np.lexsort(positions[keep].T[::-1])
+        return [positions[keep][order], velocities[keep][order], pressures[keep][order]]
+
+    for fittedPart, latticePart in zip(flatPart(fitted), flatPart(lattice)):
+        assert fittedPart == pytest.approx(latticePart, abs = 1e-12)
+    assert len(fitted[0]) > len(lattice[0])
+
+def testAJitteredExactWaveKeepsItsWaterAndCarriesTheFlowWhereItLies():
+
+    '''
+
+    The bed-fitted exact wave over the same bed, every particle moved by up to 0.15 spacings: as
+    many particles, all half a spacing or more above the bed and below the wave's surface, each
+    with the exact flow and pressure at its own place; `exactSurfaceElevation` is the surface the
+    flow reads.
+
+    '''
+
+    bed = Bathymetry([0.0, 4.0, 10.0], [0.0, 0.0, 0.4], stillWaterLevel = 1.0)
+    spacing = 1.0 / 16.0
+    fitted, _, _ = exactSolitaryWaveFluid(bed, 0.3, 2.5, spacing, bedFitted = True)
+    positions, velocities, pressures = exactSolitaryWaveFluid(bed, 0.3, 2.5, spacing, bedFitted = True, jitter = 0.15,
+                                                              seed = 3)
+    flow, pressure, surface = waveTheory.exactSolitaryFlow(positions, 0.3, 1.0, 2.5, 1.0)
+
+    assert len(positions) == len(fitted)
+    assert np.count_nonzero(np.all(positions == fitted, axis = 1)) < 0.01 * len(fitted)
+    assert np.all(positions[:, 1] >= bed.elevation(positions[:, 0]) + 0.5 * spacing - 1e-12)
+    assert np.all(positions[:, 1] < 1.0 + surface)
+    assert exactSurfaceElevation(positions[:, 0], 0.3, 1.0, 2.5) == pytest.approx(surface, abs = 1e-12)
+    assert velocities == pytest.approx(flow, abs = 1e-12)
+    assert pressures == pytest.approx(np.maximum(pressure, 0.0), abs = 1e-12)
+
+def testThePackingHookMovesTheLaidPointsBeforeTheFlowIsSet():
+
+    '''
+
+    `exactSolitaryWaveFluid` hands its laid points and the wave's surface to `pack`, every point
+    below that surface, and evaluates the exact flow and pressure where `pack` puts them.
+
+    '''
+
+    bed = Bathymetry([0.0, 4.0, 10.0], [0.0, 0.0, 0.4], stillWaterLevel = 1.0)
+    spacing = 1.0 / 16.0
+    laid, _, _ = exactSolitaryWaveFluid(bed, 0.3, 2.5, spacing, bedFitted = True)
+    clearances = []
+
+    def pack(points: np.ndarray, surface) -> np.ndarray:
+        clearances.append(surface(points[:, 0]) - points[:, 1])
+        return points - np.array([0.0, 0.1 * spacing])
+
+    positions, velocities, pressures = exactSolitaryWaveFluid(bed, 0.3, 2.5, spacing, bedFitted = True, pack = pack)
+    flow, pressure, _ = waveTheory.exactSolitaryFlow(positions, 0.3, 1.0, 2.5, 1.0)
+
+    assert positions == pytest.approx(laid - np.array([0.0, 0.1 * spacing]), abs = 1e-12)
+    assert len(clearances) == 1 and np.all(clearances[0] > 0.0)
+    assert velocities == pytest.approx(flow, abs = 1e-12)
+    assert pressures == pytest.approx(np.maximum(pressure, 0.0), abs = 1e-12)

@@ -321,12 +321,15 @@ References behind `pysurf.bemSolver`, `pysurf.OverturningWave` and `pysurf.ReefB
 ### Numerical study of three-dimensional overturning waves in shallow water
 
 - **Citation:** Guyenne, P. & Grilli, S.T. (2006), J. Fluid Mech. 547, 361-388. doi:10.1017/S0022112005007317
-- **URL:** <https://personal.egr.uri.edu/grilli//JFM-GG-6-30-05.pdf>
-- **Accessed:** 2026-10-11
-- **Relevance:** Supports running the barrel shape in 2D slices along the wave's path.
+- **URL:** <https://personal.egr.uri.edu/grilli//JFM-GG-6-30-05.pdf>; archived copy <https://web.archive.org/web/20130408075759id_/http://www.oce.uri.edu/~grilli/JFM-GG-6-30-05.pdf>
+- **Accessed:** 2026-10-11; 2026-11-11 from the archived copy (the URI server refused connections)
+- **Relevance:** Supports running the barrel shape in 2D slices along the wave's path. The sloping ridge is the case of pySurf's 3D gate (`BreakingWave3D`) and of the strip-theory test (tests/testValidationRidgeOverturn.py).
 - **Key findings:**
   - Solitary waves shoaling and breaking over a sloping ridge in a 3D fully nonlinear potential flow tank, focused on plunging breakers.
   - The ridge's transverse variation changes the evolution, shape and kinematics of the breaker, but the jet shape and dynamics at the middle cross-section are remarkably similar to 2D results.
+  - The tank is 8 h0 wide (sidewalls at y' = ±4) and ends at x' = 19, with no-flow conditions on every lateral boundary (p. 8); a run 16 h0 wide is a sensitivity case (p. 23).
+  - Table 1: breaking points at y' = 0 for k = 0.10 to 0.50 (t'_B 7.661 to 8.639) and 2D results for the cross-sections of slope 0.067, 0.052 and 0.028 (the 0.067 section: t'_B 7.629, x'_B 15.752, z'_B 0.680). The breaking point is the front face's first vertical tangent.
+  - Figure 16 (k = 0.25, z' = -0.2): |u'|max 0.651 at t' = 7.973 and 0.694 at 9.142; |u_y|max/|u_x|max 0.085 and 0.112 at those times, so the spanwise share grows as breaking develops.
 
 ### Generation of waves in Boussinesq models using a source function method
 

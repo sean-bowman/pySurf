@@ -96,9 +96,11 @@ drop as built, reads faces sloping back, vertical and overhanging at their built
 and in shallow water, keeps a void under a crest apart from the face, and records touchdown when a
 lip's tip meets the water but not when a void opens in the crest or a pocket closes under a face
 that has sloped back. The tracker on that surface keeps the vertical run the touchdown ends, though
-an earlier one lasted longer, and the longest run when no tube closes. The surface measures are
-tested
-on constructed profiles: the crest of a sech^2 profile between grid points, the highest point of a
+an earlier one lasted longer, and the longest run when no tube closes. Read over six spacings of
+arc, a plane face keeps its slope, and a vertical step three particles high on a face sloping back
+reads dx/ds above 0.2, where over two it reads within 0.05 of vertical. The surface measures are
+tested on constructed profiles: the
+crest of a sech^2 profile between grid points, the highest point of a
 bore, a front running from crest to trough, a ripple on the face that does not end it, and a
 breaking point recorded once. Breaking measured with them is
 validated against Grilli et al. (1997) through `pysurf.BreakingWave` and
@@ -425,7 +427,7 @@ class ContourFace:
     window: ParticleSurface | None
 
 def contourFace(positions: np.ndarray, spacing: float, crestX: float, bathymetry: Bathymetry, reach: float,
-                windowDepth: float, volumes: np.ndarray | None = None) -> ContourFace:
+                windowDepth: float, volumes: np.ndarray | None = None, arcLength: float = 2.0) -> ContourFace:
 
     '''
 
@@ -441,8 +443,12 @@ def contourFace(positions: np.ndarray, spacing: float, crestX: float, bathymetry
     of its lower edge, so the water's edge against the bed is never part of the surface. The face
     runs from the highest point of the surface to the window's shoreward edge;
     its slope is taken from the surface resampled at half a spacing of arc length, as the change in
-    x over two spacings of arc, so the contour's grid-scale kinks do not read as a vertical face.
-    Only the part of the face more than half a spacing above still water counts.
+    x over `arcLength` spacings of arc, so the contour's grid-scale kinks do not read as a vertical
+    face. Two spacings suit water laid on a lattice. Water started off its lattice
+    (`sphParticles.jitterPoints`) carries a surface rough at the particles' scale, which two
+    spacings read as a vertical face at moments set by the arrangement; six, the kernel's support
+    at h = 3 spacings, average it out. Only the part of the face more than half a spacing above
+    still water counts.
 
     Parameters:
     -----------
@@ -461,6 +467,8 @@ def contourFace(positions: np.ndarray, spacing: float, crestX: float, bathymetry
     volumes : np.ndarray | None
         Each particle's area, shape (N,) [m^2]: m / rho0 where particles have split
         (`pysurf.sphRefinement`); None for s^2 throughout
+    arcLength : float
+        The arc the slope is taken over, in spacings; at least one
 
     Returns:
     --------
@@ -490,18 +498,21 @@ def contourFace(positions: np.ndarray, spacing: float, crestX: float, bathymetry
     crest, height = float(surface[top, 0]), float(surface[top, 1] - level)
     front = surface[top:]
     arc = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(front, axis = 0).T))])
-    if arc[-1] < 4.0 * spacing:
+    if arc[-1] < max(4.0, arcLength + 2.0) * spacing:
         return ContourFace(crest, height, missing, missing, window)
 
+    # Samples half a spacing apart, so the slope spans `steps` of them and sits at the middle one
+    steps = max(2, int(round(2.0 * arcLength)))
+    middle = steps // 2
     samples = np.arange(0.0, arc[-1], 0.5 * spacing)
     x, z = np.interp(samples, arc, front[:, 0]), np.interp(samples, arc, front[:, 1])
-    slope = (x[4:] - x[:-4]) / (samples[4:] - samples[:-4])
-    raised = np.flatnonzero(z[2:-2] > level + 0.5 * spacing)
+    slope = (x[steps:] - x[:-steps]) / (samples[steps:] - samples[:-steps])
+    raised = np.flatnonzero(z[middle:middle + len(slope)] > level + 0.5 * spacing)
     if raised.size == 0:
         return ContourFace(crest, height, missing, missing, window)
     steepest = int(raised[np.argmin(slope[raised])])
 
-    return ContourFace(crest, height, float(slope[steepest]), float(x[steepest + 2]), window)
+    return ContourFace(crest, height, float(slope[steepest]), float(x[steepest + middle]), window)
 
 def frontFaceLean(positions: np.ndarray, crestX: float, stillWaterLevel: float, spacing: float,
                   reach: float, shoreLimit: float = np.inf) -> float:
@@ -679,6 +690,9 @@ class BreakingTracker:
     windowDepth : float | None
         For 'contour', how far below still water the window's lower edge lies [m]; None for a
         tenth of `faceReach`
+    faceArc : float
+        For 'contour', the arc the face slope is taken over, in spacings (`contourFace`): 2 for
+        water laid on a lattice, 6 for water started off it
     pocketArea : float
         For 'contour', the smallest pocket of air, in spacings squared, that marks the jet's
         touchdown: the tube closing under it, with the face vertical at the update before. The
@@ -696,6 +710,7 @@ class BreakingTracker:
     persistence: int = 3
     faceMeasure: str = 'cells'
     windowDepth: float | None = None
+    faceArc: float = 2.0
     times: list = field(default_factory = list)
     crestX: list = field(default_factory = list)
     crestHeight: list = field(default_factory = list)
@@ -775,7 +790,7 @@ class BreakingTracker:
             lean, slope, steep = float('nan'), float('nan'), False
         elif self.faceMeasure == 'contour':
             depth = self.windowDepth if self.windowDepth is not None else 0.1 * self.faceReach
-            face = contourFace(positions, s, crestX, bathymetry, self.faceReach, depth, volumes)
+            face = contourFace(positions, s, crestX, bathymetry, self.faceReach, depth, volumes, self.faceArc)
             if np.isfinite(face.crestX):
                 crestX, crestHeight = face.crestX, face.crestHeight
             slope, faceX, window = face.slope, face.faceX, face.window

@@ -218,6 +218,115 @@ def testTheStillStartLaysTheWavesLatticeAtRest():
     deep = np.flatnonzero(~p.isFluid)[(walls[:, 0] > 1.0) & (walls[:, 0] < still.toeX - 1.0) & (walls[:, 1] < -0.5 * still.spacing)]
     assert deep.size and np.allclose(p.pressures[deep] / (rho * g), 1.0 - p.positions[deep, 1], rtol = 1e-9)
 
+def testABedFittedStillStartRestsOnASlope():
+
+    '''
+
+    Still water over a 1:15 slope at 8 particles per depth, one step from rest. On the square
+    lattice the rows within three spacings of the bed stand half a spacing to one and a half
+    above it and are pushed along the slope at 0.15 g rms and down at 0.27 g on average; in
+    bed-fitted columns they stand half a spacing above it everywhere and the push is under 0.01 g
+    along the slope. Only the 'deltaSph' scheme lays bed-fitted columns, and it lays them by
+    default.
+
+    '''
+
+    bed = Bathymetry([0.0, 6.0, 15.0], [0.0, 0.0, 0.6], stillWaterLevel = 1.0)
+    pushes = {}
+    for bedFitted in (False, True):
+        still = BreakingWave(particlesPerDepth = 8, scheme = 'deltaSph', bathymetry = bed, startingWave = 'still',
+                             bedFitted = bedFitted, startJitter = 0.0)
+        still.build()
+        state = still.solver.step()
+        p = still.particles
+        x, z = p.positions[p.isFluid].T
+        nearBed = (x > 7.0) & (x < 14.0) & (z - bed.elevation(x) < 3.0 * still.spacing)
+        acceleration = p.velocities[p.isFluid][nearBed] / state.dt / constants.gravity
+        pushes[bedFitted] = (float(np.sqrt(np.mean(acceleration[:, 0]**2))), float(np.mean(acceleration[:, 1])))
+
+    assert pushes[False][0] > 0.1 and pushes[False][1] < -0.1
+    assert pushes[True][0] < 0.03 and abs(pushes[True][1]) < 0.1
+    with pytest.raises(InvalidInputError):
+        BreakingWave(bedFitted = True)
+    assert BreakingWave(scheme = 'deltaSph').bedFitted and not BreakingWave().bedFitted
+
+@pytest.mark.parametrize('startingWave', ['exact', 'still', 'serre'])
+def testAJitteredStartKeepsTheOrderedStartsWater(startingWave):
+
+    '''
+
+    Each 'deltaSph' start over a 1:15 slope at 8 particles per depth, moved off its columns by up
+    to 0.15 spacings: as many particles as the ordered start, nearly all moved, none below the
+    bed's line, at rest with hydrostatic pressure for still water. A jittered start reads its face
+    over six spacings of arc, an ordered one over two; only the 'deltaSph' scheme jitters.
+
+    '''
+
+    # Flat for a half length either side of the crest, 6.3 depths for H/d = 0.3
+    bed = Bathymetry([0.0, 14.0, 23.0], [0.0, 0.0, 0.6], stillWaterLevel = 1.0)
+    common = dict(particlesPerDepth = 8, scheme = 'deltaSph', bathymetry = bed, startingWave = startingWave, waveHeight = 0.3)
+    ordered = BreakingWave(startJitter = 0.0, **common)
+    jittered = BreakingWave(startJitter = 0.15, startSeed = 5, **common)
+    for wave in (ordered, jittered):
+        wave.build()
+    first, second = ordered.particles, jittered.particles
+    x, z = second.positions[second.isFluid].T
+
+    assert second.nFluid == first.nFluid
+    assert np.count_nonzero(np.all(second.positions[second.isFluid] == first.positions[first.isFluid], axis = 1)) \
+        < 0.05 * first.nFluid
+    assert np.all(z >= bed.elevation(x) + 0.5 * jittered.spacing - 1e-12)
+    if startingWave == 'still':
+        assert np.all(second.velocities == 0.0) and np.all(z < 1.0)
+        rho, g = constants.freshwaterDensity, constants.gravity
+        assert np.allclose(second.pressures[second.isFluid] / (rho * g), 1.0 - z, rtol = 1e-9, atol = 1e-9)
+    assert jittered.faceArc == 6.0 and ordered.faceArc == 2.0
+    assert jittered.tracker.faceArc == 6.0 and jittered.summary()['startJitter'] == 0.15
+    with pytest.raises(InvalidInputError):
+        BreakingWave(startJitter = 0.15)
+    with pytest.raises(InvalidInputError):
+        BreakingWave(scheme = 'deltaSph', startJitter = 0.5)
+
+@pytest.mark.parametrize('startingWave', ['exact', 'still', 'serre'])
+def testAPackedStartRelaxesTheJitteredStart(startingWave):
+
+    '''
+
+    Each 'deltaSph' start over the 1:15 slope at 8 particles per depth, jittered by 0.15 spacings
+    and packed: the residual h |grad Gamma| falls more than ten times, the water keeps its
+    particles, none within a quarter spacing of the bed, and the shallows, water under the
+    support and a spacing deep, keep their jittered places while the rest move. Still water stays
+    at rest with the hydrostatic pressure of each particle's packed place. Only the 'deltaSph'
+    scheme packs.
+
+    '''
+
+    bed = Bathymetry([0.0, 14.0, 23.0], [0.0, 0.0, 0.6], stillWaterLevel = 1.0)
+    common = dict(particlesPerDepth = 8, scheme = 'deltaSph', bathymetry = bed, startingWave = startingWave, waveHeight = 0.3,
+                  startJitter = 0.15, startSeed = 5)
+    jittered = BreakingWave(**common)
+    packed = BreakingWave(startPacking = True, **common)
+    for wave in (jittered, packed):
+        wave.build()
+    first, second = jittered.particles, packed.particles
+    x, z = second.positions[second.isFluid].T
+    result = packed.packing
+    unchanged = np.all(second.positions[second.isFluid] == first.positions[first.isFluid], axis = 1)
+
+    assert jittered.packing is None and not jittered.startPacking
+    assert result.gradientAfter[0] < 0.1 * result.gradientBefore[0]
+    assert second.nFluid == first.nFluid
+    assert np.all(z >= bed.elevation(x) + 0.25 * packed.spacing - 1e-9)
+    assert result.frozen > 0 and np.count_nonzero(unchanged) == result.frozen
+    if startingWave == 'still':
+        assert np.all(second.velocities == 0.0) and np.all(z < 1.0)
+        rho, g = constants.freshwaterDensity, constants.gravity
+        assert np.allclose(second.pressures[second.isFluid] / (rho * g), 1.0 - z, rtol = 1e-9, atol = 1e-9)
+    summary = packed.summary()
+    assert summary['startPacking'] and summary['packingResidual'] == result.gradientAfter[0]
+    with pytest.raises(InvalidInputError):
+        BreakingWave(startPacking = True)
+
 def testTheStillRunsDriftComesOutOfTheWavesEnergies():
 
     '''
@@ -225,7 +334,7 @@ def testTheStillRunsDriftComesOutOfTheWavesEnergies():
     A still water run whose particles' potential energy falls 300 J/m over its first second and
     then holds, with 5 J/m of kinetic energy throughout: taken out of a wave run that drifts the
     same way, the wave keeps 1500 J/m of kinetic energy and its starting potential energy. A
-    reference with a wave in it, or one shorter than the run, is refused.
+    reference with a wave in it, one laid differently, or one shorter than the run, is refused.
 
     '''
 
@@ -246,6 +355,18 @@ def testTheStillRunsDriftComesOutOfTheWavesEnergies():
     assert np.allclose(potential, wave.startingWavePotentialEnergy())
     with pytest.raises(ValueError):
         wave.energyHistory(reference = wave)
+    still.bedFitted = not wave.bedFitted
+    with pytest.raises(ValueError):
+        wave.energyHistory(reference = still)
+    still.bedFitted = wave.bedFitted
+    still.startJitter = wave.startJitter + 0.1
+    with pytest.raises(ValueError):
+        wave.energyHistory(reference = still)
+    still.startJitter = wave.startJitter
+    still.startPacking = not wave.startPacking
+    with pytest.raises(ValueError):
+        wave.energyHistory(reference = still)
+    still.startPacking = wave.startPacking
     still.frames = still.frames[:-1]
     with pytest.raises(ValueError):
         wave.energyHistory(reference = still)
