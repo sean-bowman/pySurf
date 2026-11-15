@@ -104,9 +104,11 @@ way within half the gates' tolerances, run outside the test suite (8.5 GPU hours
 A_O/H^2 +1.8 percent, A_J/H^2 -0.4 percent, theta_O -0.6 degrees. Unsplit, the pair matches on
 breaking (time -0.25 percent, Hb +1.3 percent); both unsplit runs stop on a void that closes
 inside the crest, so neither reads a jet. The tests check that the zone splits the water it
-should, keeps the mass and the sections' water, and carries the exact wave. Daughters stay split,
-so a step's cost grows with the water the zone sweeps: 3.2 times the unsplit step by touchdown on
-that reef.
+should, keeps the mass and the sections' water, merges the daughters behind each strip's crest,
+and carries the exact wave. Kept split, the water the zone sweeps raises a step's cost to 3.2 times
+the unsplit step by touchdown on that reef. Merging the daughters 1.5 h0 behind the crest holds it
+near twice the unsplit step, leaves all eight readings of the split run within 0.005 percent and
+removes 1.1×10⁻⁴ of the wave's energy (6.8 GPU hours against 8.5).
 
 Sean Bowman [11/10/2026]
 
@@ -127,8 +129,8 @@ from scipy.spatial import cKDTree
 from pysurf import constants, waveTheory
 from pysurf.bathymetry import HeightField
 from pysurf.bemSolver import JetGeometry
-from pysurf.BreakingWave import (defaultJitter, defaultPacking, jitteredFaceArc, latticeFaceArc, overturnMeasures,
-                                 refinementDefaults, refinementRules, touchdownJet)
+from pysurf.BreakingWave import (checkMergeBehind, defaultJitter, defaultPacking, jitteredFaceArc, latticeFaceArc,
+                                 overturnMeasures, refinementDefaults, refinementRules, touchdownJet)
 from pysurf.errors import InvalidInputError, NumericalInstabilityError
 from pysurf.sphBoundaries import HeightFieldBoundary
 from pysurf.sphPacking import PackingResult, packPoints
@@ -222,13 +224,15 @@ class BreakingWave3D:
     refinement : dict | None
         Split the fluid in a zone that follows the crest (`WcsphSolver.refine`, keeping h), with
         `BreakingWave`'s settings: 'levels' (1 to 3), 'behind', 'ahead' and 'above' in depths,
-        and 'fromX', the crest position the zone starts at [m], `searchFromX` by default; and
-        'strip', the width across y of the strips that each read their own crest, in depths.
-        Applied at every reading of the sections. A daughter keeps its mother's h and so meets
-        about eight times her neighbors: on the ridge at 16 particles per depth, splitting once
-        the starting crest's water above 0.15 depths over still water doubled the cost of a step,
-        and the full depth over 4.5 depths of the tank's length quadrupled it. Daughters stay
-        split, so the cost keeps growing as the zone sweeps new water. None for a uniform spacing
+        'fromX', the crest position the zone starts at [m], `searchFromX` by default, and
+        'mergeBehind', the distance behind the crest past which daughters merge back, in depths
+        (None keeps them split); and 'strip', the width across y of the strips that each read
+        their own crest, in depths. Applied at every reading of the sections. A daughter keeps its
+        mother's h and so meets about eight times her neighbors: on the ridge at 16 particles per
+        depth, splitting once the starting crest's water above 0.15 depths over still water
+        doubled the cost of a step, and the full depth over 4.5 depths of the tank's length
+        quadrupled it. Daughters that stay split make the cost grow as the zone sweeps new water;
+        merging them behind the crest bounds it. None for a uniform spacing
 
     '''
 
@@ -280,6 +284,8 @@ class BreakingWave3D:
         self.snapshots: dict[float, tuple[np.ndarray, np.ndarray]] = {}
         self.snapshotMasses: dict[float, np.ndarray] = {}
         self.wallClockSeconds = 0.0
+        self.mergedGroups = 0
+        self.mergedEnergy = 0.0                     # [J], kinetic energy the merges removed
         self._fluidMass = 0.0                       # [kg], of a particle that has not split
 
     # -- Private Helper Methods -- #
@@ -317,6 +323,7 @@ class BreakingWave3D:
                 raise InvalidInputError(f'Unknown refinement settings: {sorted(unknown)}.', parameterName = 'refinement',
                                         value = self.refinement)
             applyRules(self.refinement, refinementRules3D)
+            checkMergeBehind(self.refinement)
             if self.backend not in ('numpy', 'gpu'):
                 raise InvalidInputError('Only the numpy and gpu backends split particles.', parameterName = 'refinement',
                                         value = self.refinement)
@@ -371,10 +378,7 @@ class BreakingWave3D:
 
         '''
 
-        field = self.field
-        width = self.refinement['strip'] * self.depth
-        count = max(1, int(math.ceil((field.endY - field.startY) / width - 1e-9)))
-        strip = np.clip(np.floor((y - field.startY) / width).astype(int), 0, count - 1)
+        strip, count = self._strips(y)
         # Sorted by strip, then height: the last particle of each strip is its highest
         order = np.lexsort((z, strip))
         last = np.flatnonzero(np.diff(strip[order], append = count))
@@ -383,32 +387,61 @@ class BreakingWave3D:
 
         return crests, strip
 
+    def _strips(self, y: np.ndarray) -> tuple[np.ndarray, int]:
+
+        '''The strip across y each position lies in, and how many strips cut the tank.'''
+
+        field = self.field
+        width = self.refinement['strip'] * self.depth
+        count = max(1, int(math.ceil((field.endY - field.startY) / width - 1e-9)))
+
+        return np.clip(np.floor((y - field.startY) / width).astype(int), 0, count - 1), count
+
     def _refineCrest(self) -> int:
 
         '''
 
         Split the fluid in the zone that follows each strip's crest, a level at a time, until every
-        particle in it has split `refinement['levels']` times. Returns how many particles split.
+        particle in it has split `refinement['levels']` times, and merge the daughters more than
+        `refinement['mergeBehind']` behind their strip's crest or in a strip with no water above
+        the zone's floor. Returns how many particles split.
 
         '''
 
-        settings, d, p = self.refinement, self.depth, self.particles
+        settings, d = self.refinement, self.depth
         fromX = settings['fromX'] if settings['fromX'] is not None else self.searchFromX
         floor = self.field.stillWaterLevel + settings['above'] * d
         total = 0
         for _ in range(int(settings['levels'])):
-            fluid = np.flatnonzero(p.isFluid)
-            x, y, z = p.positions[fluid].T
+            # Only water above the floor can lie in the zone, and a strip with any holds its crest there
+            p = self.particles
+            above = np.flatnonzero(p.isFluid & (p.positions[:, 2] > floor))
+            x, y, z = p.positions[above].T
             crests, strip = self._stripCrests(x, y, z)
             crest = crests[strip]
-            zone = ((crest >= fromX) & (x > crest - settings['behind'] * d) & (x < crest + settings['ahead'] * d)
-                    & (z > floor))
+            zone = (crest >= fromX) & (x > crest - settings['behind'] * d) & (x < crest + settings['ahead'] * d)
+            if not zone.any():
+                break
             mask = np.zeros(p.nParticles, dtype = bool)
-            mask[fluid[zone]] = True
+            mask[above[zone]] = True
             split = self.solver.refine(mask & (refinementLevels(p, self._fluidMass) < settings['levels']))
             total += split
             if split == 0:
                 break
+        if settings['mergeBehind'] is not None:
+            p = self.particles
+            daughters = np.flatnonzero(p.isFluid & (refinementLevels(p, self._fluidMass) > 0))
+            if daughters.size:
+                above = p.isFluid & (p.positions[:, 2] > floor)
+                crests, _ = self._stripCrests(*p.positions[above].T)
+                strip, _ = self._strips(p.positions[daughters, 1])
+                crest = crests[strip]
+                behind = (p.positions[daughters, 0] < crest - settings['mergeBehind'] * d) | np.isneginf(crest)
+                mask = np.zeros(p.nParticles, dtype = bool)
+                mask[daughters[behind]] = True
+                merged = self.solver.merge(mask, self._fluidMass)
+                self.mergedGroups += merged.groups
+                self.mergedEnergy += merged.removedEnergy
 
         return total
 
@@ -468,6 +501,7 @@ class BreakingWave3D:
                                                                                    seed = self.startSeed, pack = pack)
         self.particles = ParticleSystem.assemble(fluidPositions, self.boundary.positions(), s, rho, fluidVelocities)
         self._fluidMass = float(self.particles.masses[0])
+        self.mergedGroups, self.mergedEnergy = 0, 0.0
 
         # `BreakingWave`'s deltaSph scheme (see its build for the reasons behind each setting)
         schemeOptions = dict(kernelType = 'wendlandC2', densityFilterInterval = 0, densityDiffusion = 'hydrostatic',
@@ -672,6 +706,10 @@ class BreakingWave3D:
             if jet is not None:
                 sections[y].update(overturnMeasures(tracker, jet, self.field.stillWaterLevel, self.depth))
 
-        return {'particlesPerDepth': self.particlesPerDepth, 'fluidParticles': self.particles.nFluid,
-                'boundaryParticles': self.particles.nBoundary, 'time': self.solver.time,
-                'wallClockSeconds': self.wallClockSeconds, 'refinement': self.refinement, 'sections': sections}
+        result = {'particlesPerDepth': self.particlesPerDepth, 'fluidParticles': self.particles.nFluid,
+                  'boundaryParticles': self.particles.nBoundary, 'time': self.solver.time,
+                  'wallClockSeconds': self.wallClockSeconds, 'refinement': self.refinement, 'sections': sections}
+        if self.refinement is not None and self.refinement['mergeBehind'] is not None:
+            result.update({'mergedGroups': self.mergedGroups, 'mergedEnergy': self.mergedEnergy})
+
+        return result

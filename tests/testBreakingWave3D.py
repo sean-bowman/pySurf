@@ -27,6 +27,7 @@ from pysurf import constants, waveTheory
 from pysurf.bathymetry import Bathymetry, HeightField
 from pysurf.errors import InvalidInputError
 from pysurf.sphBoundaries import HeightFieldBoundary
+from pysurf.sphRefinement import refinementLevels
 from pysurf.BreakingWave3D import BreakingWave3D
 from pysurf.waveMakers import (exactFlowInChunks, exactSolitaryBoundaryPressure, exactSolitaryBoundaryPressure3D,
                                exactSolitaryWaveFluid, exactSolitaryWaveFluid3D)
@@ -201,6 +202,44 @@ def testTheZoneSplitsTheCrestsWaterAndKeepsItsMass(flat):
     with pytest.raises(InvalidInputError):
         BreakingWave3D(flat, height, crestX, depth = 1.0, backend = 'numpy', refinement = {'across': 1.0})
 
+def testTheZoneMergesWhatLiesBehindEachStripsCrest(flat):
+
+    settings = {'behind': 0.5, 'ahead': 0.5, 'above': 0.05, 'fromX': 0.0, 'mergeBehind': 0.5}
+    wave = BreakingWave3D(flat, height, crestX, depth = 1.0, particlesPerDepth = 8, backend = 'numpy',
+                          refinement = settings)
+    wave.build()
+    walls = wave.particles.positions[~wave.particles.isFluid].copy()
+    split = wave._refineCrest()
+    p = wave.particles
+    mass, momentum = p.masses[p.isFluid].sum(), (p.masses[p.isFluid, None] * p.velocities[p.isFluid]).sum(axis = 0)
+
+    # With the zone stopped and the merging distance at the crest, the daughters behind each strip's
+    # crest merge; a group the crest line cuts stays split, so every daughter more than a spacing behind merges
+    wave.refinement.update(fromX = 1e9, behind = 0.0, mergeBehind = 0.0)
+    s = wave.spacing
+    above = p.isFluid & (p.positions[:, 2] > 1.05)
+    crests, _ = wave._stripCrests(*p.positions[above].T)
+    strips, _ = wave._strips(p.positions[:, 1])
+    far = p.isFluid & (p.positions[:, 0] < crests[strips] - s) & (refinementLevels(p, wave._fluidMass) > 0)
+    daughters = int(np.sum(far))
+    count = p.nFluid
+    wave._refineCrest()
+    p = wave.particles
+    strips, _ = wave._strips(p.positions[:, 1])
+    far = p.isFluid & (p.positions[:, 0] < crests[strips] - s) & (refinementLevels(p, wave._fluidMass) > 0)
+
+    assert split > 0 and daughters > 0
+    assert wave.mergedGroups >= daughters / 8
+    assert not far.any()
+    assert p.nFluid == count - 7 * wave.mergedGroups
+    assert p.masses[p.isFluid].sum() == pytest.approx(mass, rel = 1e-12)
+    assert (p.masses[p.isFluid, None] * p.velocities[p.isFluid]).sum(axis = 0) == pytest.approx(momentum, rel = 1e-12,
+                                                                                                abs = 1e-12)
+    assert p.positions[~p.isFluid] == pytest.approx(walls)
+
+    with pytest.raises(InvalidInputError):
+        BreakingWave3D(flat, height, crestX, depth = 1.0, backend = 'numpy', refinement = {'mergeBehind': 0.5})
+
 wp = pytest.importorskip('warp')
 cuda = pytest.mark.skipif(wp.get_cuda_device_count() == 0, reason = 'needs a CUDA device')
 
@@ -254,3 +293,31 @@ def testARefinedRunSplitsItsCrestAndCarriesTheWave():
     flow = wave.velocity(np.array([[crest, 0.5, 0.5]]), snapshotTime)[0]
     exact, _, _ = waveTheory.exactSolitaryFlow(np.array([[crest, 0.5]]), height, 1.0, crest, 1.0)
     assert flow[0] == pytest.approx(exact[0, 0], rel = 0.05)
+
+@cuda
+def testMergingBehindTheCrestLeavesTheFlowUnderItAlone():
+
+    # The zone a quarter depth behind the crest and the merging a quarter depth further: in 0.6 s the
+    # crest moves about 0.75 depths and leaves the first daughters behind. At 8 particles per depth
+    # the wave itself decays over that time (the flow under it falls 12 percent short of the exact
+    # wave's by 0.5 s, split or not), so the merged run is held to the run that keeps its daughters.
+    field = HeightField.fromFunction(lambda x, y: 0.0 * x, (0.0, 10.0, 0.0, 1.0), 1.0 / 32.0, stillWaterLevel = 1.0)
+    start, snapshotTime = 6.0, 0.5
+    zone = {'fromX': 0.0, 'above': 0.1, 'behind': 0.25, 'ahead': 0.5}
+    crest = start + waveTheory.solitaryWaveSpeed(height, 1.0) * snapshotTime
+    runs = {}
+    for name, refinement in (('split', zone), ('merged', {**zone, 'mergeBehind': 0.5})):
+        wave = BreakingWave3D(field, height, start, particlesPerDepth = 8, recordTimes = (snapshotTime,), endTime = 0.6,
+                              refinement = refinement)
+        wave.build()
+        mass = wave.particles.masses[wave.particles.isFluid].sum()
+        wave.run(progress = False)
+        p = wave.particles
+        assert p.masses[p.isFluid].sum() == pytest.approx(mass, rel = 1e-12)
+        assert np.all(np.isfinite(p.positions))
+        runs[name] = (wave, wave.velocity(np.array([[crest, 0.5, 0.5]]), snapshotTime)[0])
+
+    merged, split = runs['merged'][0], runs['split'][0]
+    assert merged.mergedGroups > 0
+    assert merged.particles.nFluid == split.particles.nFluid - 7 * merged.mergedGroups
+    assert runs['merged'][1][0] == pytest.approx(runs['split'][1][0], rel = 0.01)

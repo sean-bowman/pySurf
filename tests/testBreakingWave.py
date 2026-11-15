@@ -445,8 +445,40 @@ def testTheRefinementZoneWaitsForTheCrest():
     assert wave.crestX < wave.toeX
     assert wave._refineCrest() == 0
 
+def testTheZoneMergesTheDaughtersItLeavesBehind():
+
+    wave = BreakingWave(depth = 1.0, waveHeight = 0.3, particlesPerDepth = 8, scheme = 'deltaSph', backend = 'numpy',
+                        refinement = {'levels': 1, 'fromX': 0.0, 'mergeBehind': 1.0})
+    wave.build()
+    p = wave.particles
+    walls = p.positions[~p.isFluid].copy()
+    crestX = wave.crestX
+    wave.tracker.times.append(0.0)
+    wave.tracker.crestX.append(crestX)
+    wave._refineCrest()
+    p = wave.particles
+    mass, momentum = p.masses[p.isFluid].sum(), (p.masses[p.isFluid, None] * p.velocities[p.isFluid]).sum(axis = 0)
+    left = int(np.sum(refinementLevels(p, wave._fluidMass) > 0))
+
+    # The crest moves 2.6 depths on, leaving every daughter more than a depth behind it
+    wave.tracker.crestX.append(crestX + 2.6)
+    wave._refineCrest()
+    p = wave.particles
+    levels = refinementLevels(p, wave._fluidMass)
+    behind = p.isFluid & (p.positions[:, 0] < crestX + 1.6)
+
+    assert left > 0
+    assert wave.mergedGroups >= 0.95 * left / 4
+    assert np.sum(levels[behind] > 0) <= 0.05 * left
+    assert wave.mergedEnergy >= 0.0
+    assert p.masses[p.isFluid].sum() == pytest.approx(mass, rel = 1e-13)
+    assert (p.masses[p.isFluid, None] * p.velocities[p.isFluid]).sum(axis = 0) == pytest.approx(momentum, rel = 1e-12)
+    assert p.positions[~p.isFluid] == pytest.approx(walls)
+    assert wave.summary()['mergedGroups'] == wave.mergedGroups
+
 @pytest.mark.parametrize('settings, backend', [({'level': 1}, 'numpy'), ({'levels': 0}, 'numpy'), ({'levels': 4}, 'numpy'),
-                                               ({'levels': 1}, 'compiled')])
+                                               ({'levels': 1}, 'compiled'), ({'mergeBehind': 0.5}, 'numpy'),
+                                               ({'mergeBehind': -1.0}, 'numpy')])
 def testBadRefinementSettingsAreRefused(settings, backend):
 
     with pytest.raises(InvalidInputError):

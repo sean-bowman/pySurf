@@ -184,7 +184,7 @@ from pysurf import constants
 from pysurf.sphKernels import SphKernel, createKernel
 from pysurf.sphNeighbors import neighborPairs
 from pysurf.sphParticles import ParticleSystem
-from pysurf.sphRefinement import splitParticles
+from pysurf.sphRefinement import MergeResult, mergeParticles, splitParticles
 
 # Tait exponent: 7 is the standard value for water
 taitExponent: float = 7.0
@@ -1648,6 +1648,53 @@ class WcsphSolver:
         self._updatePairs()
 
         return count
+
+    def merge(self, mask: np.ndarray, referenceMass: float, lengthRatio: float = 1.0) -> MergeResult:
+
+        '''
+
+        Merge the split fluid particles `mask` selects, 2^dim of one level into one particle of the
+        level above (`sphRefinement.mergeParticles`), between steps. The boundary keeps its
+        particles and their indices, and a piston's mask follows the particle arrays.
+
+        Parameters:
+        -----------
+        mask : np.ndarray
+            Particles that may merge, shape (N,); boundary particles and particles that have not
+            split are left alone
+        referenceMass : float
+            The mass of a fluid particle that has not split [kg]
+        lengthRatio : float
+            The ratio the daughters' smoothing length took at their split
+
+        Returns:
+        --------
+        MergeResult : The groups merged and the kinetic energy removed
+
+        Raises:
+        -------
+        ValueError : On the compiled backend, or with particle shifting, which take one smoothing
+            length throughout.
+
+        '''
+
+        config, p = self._config, self._particles
+        if self._compiled:
+            raise ValueError('The compiled backend takes one smoothing length throughout; merge on numpy or gpu.')
+        if config.particleShifting:
+            raise ValueError('Particle shifting takes one smoothing length throughout.')
+        result = mergeParticles(p, mask, config.referenceDensity, referenceMass, config.smoothingLength, lengthRatio)
+        if result.groups == 0:
+            return result
+        self._masses = p.masses
+        pistonMask = getattr(self._boundary, '_pistonMask', None)
+        if pistonMask is not None:
+            self._boundary._pistonMask = pistonMask[result.source]
+        if self._boundary is not None:
+            self._boundary.enforce(p)
+        self._updatePairs()
+
+        return result
 
     @property
     def shortestLength(self) -> float:

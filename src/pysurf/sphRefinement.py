@@ -7,6 +7,7 @@ the sharpening crest and the jet of a breaking wave, while the rest of the water
 spacing it was laid on.
 
     splitParticles      each chosen fluid particle into 2^dim daughters on its own lattice refined by two
+    mergeParticles      groups of 2^dim chosen daughters of one level back into one particle each
     refinementLevels    how many times each particle has split, from its mass
 
 A fluid particle of mass m, smoothing length h and spacing s = (m / rho0)^(1/dim) splits into
@@ -32,8 +33,21 @@ the spacing alone does what refinement is for.
 The first daughter takes the mother's place in the particle arrays and the others are appended,
 so the indices of every other particle, the boundary's among them, are unchanged.
 
-Daughters are not merged back: a particle stays fine once split, and the fine region grows behind
-a moving refinement zone.
+Merging undoes a split where the flow no longer needs it, so the fine region does not grow behind
+a moving refinement zone. The chosen fluid particles of each level are binned into cells the size
+of a particle one level coarser, and in each cell holding at least 2^dim of them the 2^dim nearest
+its centre merge into one. Each pass leaves the particles of a cell short of 2^dim; a second pass
+on a grid shifted half a cell along every axis takes up most of them. The merged particle carries
+the group's mass, sits at its centre of mass, moves with its momentum and takes its volume, so
+rho = sum m / sum (m / rho); its pressure and acceleration are the mass-weighted means, and its
+smoothing length the group's over `lengthRatio`. Mass, momentum and the centre of mass, and with it
+the potential energy, are conserved exactly. The kinetic energy of the members' motion relative to
+their centre of mass, 1/2 sum m |v - V|^2, is removed, and returned so a run can account for it. A
+particle merged straight after its split is the mother again.
+
+A merge removes particles but leaves every boundary particle's index alone: the merged particle
+takes the place of its group's first member, and fluid particles from the end of the arrays fill
+the places of the others that lie among the boundary's.
 
 ----------------------------------------------------------------------
                             Validation status
@@ -41,17 +55,23 @@ a moving refinement zone.
 
 Bookkeeping, checked exactly in tests/testSphRefinement.py: mass, momentum, kinetic energy and
 centre of mass through a split, the daughters' masses, lengths and positions, and that the other
-particles keep their indices. The sums with mixed smoothing lengths are checked there against the
-array formulation, device against host, and the numpy and GPU solvers step a tank with mixed
-lengths alike. A still tank of the deltaSph scheme (h = 2 spacings), split over half its width with
-h kept, keeps its fastest particle at 0.0067 sqrt(g d) after 0.2 s against 0.0059 unsplit, inside
-the uniform tank's 0.01; its particles move up to 0.37 coarse spacings, against 0.22 unsplit, as
-the daughters settle out of their squares.
+particles keep their indices; through a merge, mass, momentum and centre of mass, the kinetic
+energy removed, a split undone, and the boundary's indices. The sums with mixed smoothing lengths
+are checked there against the array formulation, device against host, and the numpy and GPU
+solvers step a tank with mixed lengths alike. A still tank of the deltaSph scheme (h = 2
+spacings), split over half its width with h kept, keeps its fastest particle at 0.0067 sqrt(g d)
+after 0.2 s against 0.0059 unsplit, inside the uniform tank's 0.01; its particles move up to 0.37
+coarse spacings, against 0.22 unsplit, as the daughters settle out of their squares. The same
+tank on the GPU, split, merged back after 0.1 s and run to 0.2 s, stays inside both limits.
 
 Not validated on breaking. On the Surf Ranch overturn (`BreakingWave` with the fluid split once in
 a zone that follows the crest), four of the five touchdown criteria of Feddersen et al. (2024)
 pass at 64 particles per depth and two at 128; the overturn area is 18 and 21 percent small
-against a criterion of 15.
+against a criterion of 15. Merging is checked on breaking against the same runs without it, a
+consistency check rather than a validation: on that overturn at 32 particles per depth, merging
+the daughters 1.5 depths behind the crest leaves all eight touchdown readings of the split run
+within 0.005 percent, in 2D and in a 3D tank one depth wide, and removes 2×10⁻⁵ and 1.1×10⁻⁴ of
+the wave's energy.
 
 Sean Bowman [11/07/2026]
 
@@ -61,12 +81,36 @@ Sean Bowman [11/07/2026]
 from __future__ import annotations
 
 import itertools
+from dataclasses import dataclass, field
 
 # Third-party imports
 import numpy as np
 
 # Local imports
 from pysurf.sphParticles import ParticleSystem
+
+@dataclass
+class MergeResult:
+
+    '''
+
+    What a merge did.
+
+    Parameters:
+    -----------
+    groups : int
+        How many groups merged, each into one particle
+    removedEnergy : float
+        Kinetic energy of the members' motion about their groups' centres of mass, which the merge
+        removed [J], or [J/m] per unit width in 2D
+    source : np.ndarray
+        For each particle after the merge, its index before, shape (N_after,)
+
+    '''
+
+    groups: int = 0
+    removedEnergy: float = 0.0
+    source: np.ndarray = field(default_factory = lambda: np.zeros(0, dtype = np.intp))
 
 def refinementLevels(particles: ParticleSystem, referenceMass: float) -> np.ndarray:
 
@@ -136,3 +180,124 @@ def splitParticles(particles: ParticleSystem, mask: np.ndarray, referenceDensity
     particles.lengths = np.concatenate([lengths, repeat(length)])
 
     return int(chosen.size)
+
+def _cellGroups(positions: np.ndarray, cell: float, offset: float, size: int) -> np.ndarray:
+
+    '''
+
+    Groups of `size` points binned into cubic cells `cell` across, the grid shifted by `offset`
+    cells: in each cell holding at least `size`, the `size` nearest its centre. Returns the points'
+    indices, shape (G, size).
+
+    '''
+
+    scaled = positions / cell + offset
+    keys = np.floor(scaled).astype(np.int64)
+    keys -= keys.min(axis = 0)
+    flat = np.ravel_multi_index(keys.T, keys.max(axis = 0) + 1)
+    distance = np.sum((scaled - np.floor(scaled) - 0.5)**2, axis = 1)
+    order = np.lexsort((distance, flat))
+    sortedCells = flat[order]
+    starts = np.flatnonzero(np.r_[True, sortedCells[1:] != sortedCells[:-1]])
+    counts = np.diff(np.r_[starts, len(order)])
+    cellOf = np.repeat(np.arange(len(starts)), counts)
+    rank = np.arange(len(order)) - starts[cellOf]
+    take = (rank < size) & (counts[cellOf] >= size)
+
+    return order[take].reshape(-1, size)
+
+def mergeParticles(particles: ParticleSystem, mask: np.ndarray, referenceDensity: float, referenceMass: float,
+                   referenceLength: float, lengthRatio: float = 1.0, offsets: tuple = (0.0, 0.5)) -> MergeResult:
+
+    '''
+
+    Merge the split fluid particles `mask` selects, in place, 2^dim of one level at a time into one
+    particle of the level above.
+
+    Parameters:
+    -----------
+    particles : ParticleSystem
+        The particle state; its arrays are replaced by shorter ones
+    mask : np.ndarray
+        Particles that may merge, shape (N,); boundary particles and particles that have not
+        split are left alone
+    referenceDensity : float
+        rho0, which with a merged particle's mass gives the cells' size [kg/m^3]
+    referenceMass : float
+        The mass of a fluid particle that has not split [kg]
+    referenceLength : float
+        The smoothing length of a particle that has not split [m]
+    lengthRatio : float
+        The ratio the daughters' smoothing length took at their split; a merged particle takes its
+        group's over it
+    offsets : tuple
+        The grid's shift for each pass, in cells
+
+    Returns:
+    --------
+    MergeResult : The groups merged, the kinetic energy removed, and where each particle came from
+
+    '''
+
+    dimensions = particles.dimensions
+    size = 2**dimensions
+    levels = refinementLevels(particles, referenceMass)
+    eligible = np.asarray(mask, dtype = bool) & particles.isFluid & (levels > 0)
+    groups = []
+    for level in np.unique(levels[eligible]):
+        # The cells are the size of a particle one level coarser
+        cell = (referenceMass / size**(level - 1) / referenceDensity)**(1.0 / dimensions)    # [m]
+        free = np.flatnonzero(eligible & (levels == level))
+        for offset in offsets:
+            if free.size < size:
+                break
+            members = free[_cellGroups(particles.positions[free], cell, offset, size)]
+            if members.size == 0:
+                continue
+            groups.append(members)
+            free = np.setdiff1d(free, members.ravel(), assume_unique = True)
+    if not groups:
+        return MergeResult(source = np.arange(particles.nParticles))
+
+    members = np.sort(np.vstack(groups), axis = 1)
+    lengths = particles.smoothingLengths(referenceLength).astype(float, copy = True)
+    m = particles.masses[members]                                                       # [kg]
+    total = m.sum(axis = 1)                                                             # [kg]
+    weights = m / total[:, None]
+    velocity = np.einsum('gk,gkd->gd', weights, particles.velocities[members])         # [m/s]
+    relative = particles.velocities[members] - velocity[:, None, :]
+    removed = 0.5 * float(np.sum(m * np.sum(relative**2, axis = 2)))
+
+    # The merged particle takes the place of its group's first member
+    first = members[:, 0]
+    particles.positions[first] = np.einsum('gk,gkd->gd', weights, particles.positions[members])
+    particles.accelerations[first] = np.einsum('gk,gkd->gd', weights, particles.accelerations[members])
+    particles.pressures[first] = np.sum(weights * particles.pressures[members], axis = 1)
+    particles.densities[first] = total / np.sum(m / particles.densities[members], axis = 1)
+    particles.velocities[first] = velocity
+    particles.masses[first] = total
+    lengths[first] = lengths[members].mean(axis = 1) / lengthRatio
+    particles.lengths = lengths
+
+    # Fluid particles from the end fill the places among the boundary's, so its indices hold
+    count = particles.nParticles
+    removedIndices = np.sort(members[:, 1:].ravel())
+    alive = np.ones(count, dtype = bool)
+    alive[removedIndices] = False
+    boundary = np.flatnonzero(~particles.isFluid)
+    last = int(boundary[-1]) if boundary.size else -1
+    holes = removedIndices[removedIndices <= last]
+    tail = np.flatnonzero(alive[last + 1:]) + last + 1
+    if tail.size < holes.size:
+        raise RuntimeError('Too few fluid particles follow the boundary to fill the places a merge leaves among it.')
+    movers = tail[tail.size - holes.size:]
+    source = np.arange(count)
+    source[holes] = movers
+    alive[holes] = True
+    alive[movers] = False
+    source = source[alive]
+
+    for name in ('positions', 'velocities', 'accelerations', 'densities', 'pressures', 'masses', 'isFluid', 'lengths'):
+        setattr(particles, name, getattr(particles, name)[source])
+
+    return MergeResult(groups = len(members), removedEnergy = removed, source = source)

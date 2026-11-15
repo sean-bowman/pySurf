@@ -4,9 +4,11 @@
 
 Checks of pysurf.sphRefinement and of the solver with particles of mixed smoothing lengths: a split
 conserves mass, momentum, kinetic energy and the centre of mass exactly and leaves every other
-particle's index alone; the device sums over a cloud of mixed lengths agree with the array
-formulation to float32 rounding; the numpy and GPU solvers step a refined tank alike; and a still
-tank refined over half its width stays at rest under the uniform tank's criteria.
+particle's index alone; a merge conserves mass, momentum and the centre of mass exactly, removes
+the kinetic energy it reports, undoes a split, and leaves the boundary's indices alone; the device
+sums over a cloud of mixed lengths agree with the array formulation to float32 rounding; the numpy
+and GPU solvers step a refined tank alike; and a still tank refined over half its width, then
+merged back, stays at rest under the uniform tank's criteria.
 
 Sean Bowman [11/07/2026]
 
@@ -23,7 +25,7 @@ from pysurf.sphBoundaries import BedBoundary
 from pysurf.sphKernels import createKernel
 from pysurf.sphNeighbors import neighborPairs
 from pysurf.sphParticles import ParticleSystem, latticePoints
-from pysurf.sphRefinement import refinementLevels, splitParticles
+from pysurf.sphRefinement import mergeParticles, refinementLevels, splitParticles
 from pysurf.sphSolver import (SimulationConfig, WcsphSolver, artificialViscosity, continuityRate, correctionMatrices,
                               densityDiffusionRate, extrapolatedWallPressure, pairAccelerations, shepardDensity,
                               taitEquationOfState, xsphVelocity)
@@ -109,6 +111,108 @@ def testOtherParticlesKeepTheirIndicesAndSplitsCount():
     assert np.all(levels[count:count + 5] == 2)
     assert set(np.unique(levels[particles.isFluid])) == {0, 1, 2}
     assert np.all(levels[~particles.isFluid] == 0)
+
+#----------------------------------------------------------------------#
+# -- Merging -- #
+#----------------------------------------------------------------------#
+
+def fluidTotals(particles: ParticleSystem) -> tuple:
+
+    '''The fluid's mass, momentum, kinetic energy and first moment of mass.'''
+
+    fluid = particles.isFluid
+    m = particles.masses[fluid]
+
+    return (m.sum(), (m[:, None] * particles.velocities[fluid]).sum(axis = 0), particles.kineticEnergy(),
+            (m[:, None] * particles.positions[fluid]).sum(axis = 0))
+
+@pytest.mark.parametrize('dimensions', [2, 3])
+def testAMergeConservesMassMomentumAndTheCentreOfMassAndReportsTheEnergyItRemoves(dimensions):
+
+    spacing = 0.02
+    particles = lattice(dimensions, spacing)
+    count = particles.nParticles
+    splitParticles(particles, particles.positions[:, 0] > 0.1, rho0, 0.05)
+    # The daughters drift off their squares and apart in velocity, as they do in a flow
+    rng = np.random.default_rng(3)
+    daughters = refinementLevels(particles, rho0 * spacing**dimensions) == 1
+    particles.positions[daughters] += rng.uniform(-0.1, 0.1, size = (int(daughters.sum()), dimensions)) * spacing
+    particles.velocities[daughters] += rng.normal(0.0, 0.3, size = (int(daughters.sum()), dimensions))
+    before = fluidTotals(particles)
+    split = particles.nParticles
+    result = mergeParticles(particles, np.ones(particles.nParticles, dtype = bool), rho0, rho0 * spacing**dimensions, 0.05)
+    after = fluidTotals(particles)
+
+    assert result.groups > 0.8 * (split - count) / (2**dimensions - 1)
+    assert particles.nParticles == split - result.groups * (2**dimensions - 1)
+    assert after[0] == pytest.approx(before[0], rel = 1e-14)
+    assert after[1] == pytest.approx(before[1], rel = 1e-12, abs = 1e-12)
+    assert after[3] == pytest.approx(before[3], rel = 1e-13)
+    assert result.removedEnergy > 0.0
+    assert after[2] == pytest.approx(before[2] - result.removedEnergy, rel = 1e-12)
+    # A merged particle is one level up, and no particle lands below the level it started at
+    assert set(np.unique(refinementLevels(particles, rho0 * spacing**dimensions)[particles.isFluid])) <= {0, 1}
+
+@pytest.mark.parametrize('dimensions', [2, 3])
+def testAMergeStraightAfterASplitRestoresTheMother(dimensions):
+
+    spacing, length = 0.02, 0.06
+    particles = lattice(dimensions, spacing)
+    count = particles.nParticles
+    mother = int(np.flatnonzero(particles.isFluid)[7])
+    state = {name: getattr(particles, name)[mother].copy() for name in ('positions', 'velocities', 'accelerations')}
+    state.update(densities = particles.densities[mother], pressures = particles.pressures[mother], masses = particles.masses[mother])
+    others = particles.positions.copy()
+    mask = np.zeros(count, dtype = bool)
+    mask[mother] = True
+    splitParticles(particles, mask, rho0, length)
+    result = mergeParticles(particles, np.ones(particles.nParticles, dtype = bool), rho0, rho0 * spacing**dimensions, length)
+
+    assert result.groups == 1
+    assert result.removedEnergy == pytest.approx(0.0, abs = 1e-15)
+    assert particles.nParticles == count
+    for name, value in state.items():
+        assert getattr(particles, name)[mother] == pytest.approx(value, rel = 1e-13, abs = 1e-15)
+    assert particles.lengths[mother] == pytest.approx(length)
+    assert particles.positions == pytest.approx(others, rel = 1e-13, abs = 1e-15)
+
+def testAMergeKeepsTheBoundarysIndicesAndThePistonsMask():
+
+    spacing = 0.05
+    bed = Bathymetry([0.0, 3.0], [0.0, 0.0], stillWaterLevel = 1.0)
+    boundary = BedBoundary(bed, spacing, nLayers = 3, wallTop = 1.5, endWallTop = 1.5)
+    fluid = latticePoints(np.array([0.0, 0.0]), np.array([3.0, 1.0]), spacing)
+    particles = ParticleSystem.assemble(fluid, boundary.positions(), spacing, rho0)
+    config = SimulationConfig(domainMin = np.array([-0.3, -0.3]), domainMax = np.array([3.3, 1.5]), particleSpacing = spacing,
+                              referenceDensity = rho0, speedOfSound = 20.0, maxTimeStep = 1e-3)
+    solver = WcsphSolver(config, boundary = boundary)
+    solver.initialize(particles)
+    boundary.attachPiston(particles)
+    walls = ~particles.isFluid
+    wallPositions = particles.positions[walls].copy()
+    pistons = boundary._pistonMask.copy()
+    # Splitting the first fluid particles leaves their merged groups' other members among the boundary's places
+    solver.refine(particles.positions[:, 0] < 1.0)
+    result = solver.merge(np.ones(particles.nParticles, dtype = bool), rho0 * spacing**2)
+
+    assert result.groups > 0
+    assert particles.nParticles >= len(walls)
+    assert np.array_equal(~particles.isFluid[:len(walls)], walls)
+    assert particles.positions[:len(walls)][walls] == pytest.approx(wallPositions)
+    assert np.array_equal(boundary._pistonMask[:len(walls)], pistons)
+    assert len(boundary._pistonMask) == particles.nParticles
+    assert not boundary._pistonMask[len(walls):].any()
+
+def testParticlesThatHaveNotSplitDoNotMerge():
+
+    particles = lattice(2)
+    count, positions = particles.nParticles, particles.positions.copy()
+    result = mergeParticles(particles, np.ones(count, dtype = bool), rho0, rho0 * 0.02**2, 0.05)
+
+    assert result.groups == 0
+    assert particles.nParticles == count
+    assert np.array_equal(result.source, np.arange(count))
+    assert np.array_equal(particles.positions, positions)
 
 #----------------------------------------------------------------------#
 # -- Mixed smoothing lengths: the device sums against the array sums -- #
@@ -299,6 +403,30 @@ def testAStillTankSplitOverHalfItsWidthStaysAtRest(resident):
 
     assert state.maxVelocity < 0.01 * math.sqrt(constants.gravity * fillHeight)
     assert np.max(np.abs(particles.positions[particles.isFluid] - start)) < 0.5 * tank.particleSpacing
+
+def testAStillTankSplitThenMergedStaysAtRest():
+
+    # The same criteria as the split tank: split over half the width with h kept, settled 0.1 s,
+    # merged back, and run on to 0.2 s
+    pytest.importorskip('warp')
+    solver, particles, tank, split = tankSolver('gpu', tilt = 0.0, lengthRatio = 1.0)
+    start = particles.positions[particles.isFluid].copy()
+    count = int(np.sum(particles.isFluid)) - split * 3
+    solver.advance(0.1)
+    reference = rho0 * tank.particleSpacing**2
+    result = solver.merge(np.ones(particles.nParticles, dtype = bool), reference)
+    state = solver.advance(0.2)
+    fillHeight = tank.fillRatio * tank.tankHeight
+    left = int(np.sum(refinementLevels(particles, reference)[particles.isFluid] > 0))
+
+    assert result.groups > 0.9 * split
+    assert left == 4 * (split - result.groups)
+    assert particles.nFluid == count + 3 * (split - result.groups)
+    assert state.maxVelocity < 0.01 * math.sqrt(constants.gravity * fillHeight)
+    # A merged particle takes its group's centre, so each particle is held to the nearest place the fluid started
+    from scipy.spatial import cKDTree
+    distance, _ = cKDTree(start).query(particles.positions[particles.isFluid])
+    assert distance.max() < 0.5 * tank.particleSpacing
 
 def testRefiningGrowsThePistonsMask():
 

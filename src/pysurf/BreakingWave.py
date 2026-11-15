@@ -208,14 +208,34 @@ inputRules = (
 )
 
 # The crest-following refinement zone: splits, reach behind and ahead of the crest and floor over
-# still water in depths, and the crest position it starts at (None for the toe)
-refinementDefaults = {'levels': 1, 'behind': 1.0, 'ahead': 1.5, 'above': 0.15, 'fromX': None}
+# still water in depths, the crest position it starts at (None for the toe), and the distance behind
+# the crest past which daughters merge, in depths (None to keep them split)
+refinementDefaults = {'levels': 1, 'behind': 1.0, 'ahead': 1.5, 'above': 0.15, 'fromX': None, 'mergeBehind': None}
 refinementRules = (
     integerRule('levels', 'Refinement levels', minimum = 1, maximum = 3, exclusiveMinimum = False),
     numericRule('behind', 'Refinement zone behind the crest', minimum = 0.0, exclusiveMinimum = False),
     numericRule('ahead',  'Refinement zone ahead of the crest', minimum = 0.0, exclusiveMinimum = False),
     numericRule('above',  'Refinement zone floor over still water', minimum = -10.0),
+    numericRule('mergeBehind', 'Merging distance behind the crest', minimum = 0.0, exclusiveMinimum = False,
+                required = False),
 )
+
+def checkMergeBehind(refinement: dict) -> None:
+
+    '''
+
+    Refuse a merging distance inside the zone's reach behind the crest, where the zone would split
+    again what it merges.
+
+    Raises:
+    -------
+    InvalidInputError : If 'mergeBehind' is shorter than 'behind'.
+
+    '''
+
+    if refinement['mergeBehind'] is not None and refinement['mergeBehind'] < refinement['behind']:
+        raise InvalidInputError('Daughters must merge behind the refinement zone: mergeBehind cannot be shorter '
+                                'than behind.', parameterName = 'refinement', value = refinement)
 
 def touchdownJet(surface: np.ndarray, spacing: float, depth: float) -> JetGeometry:
 
@@ -352,8 +372,10 @@ class BreakingWave:
         Split the fluid in a zone that follows the crest (`WcsphSolver.refine`, keeping h): 'levels',
         how many times a particle there splits (1 to 3); 'behind' and 'ahead', the zone's reach
         from the tracked crest along x, and 'above', its floor over still water, in depths; 'fromX',
-        the crest position the zone starts at [m], the toe by default. Applied at every breaking
-        check; daughters stay split when the zone moves on. None for a uniform spacing.
+        the crest position the zone starts at [m], the toe by default; 'mergeBehind', the distance
+        behind the crest in depths, no shorter than 'behind', past which daughters merge back
+        (`WcsphSolver.merge`), or None to keep them split. Applied at every breaking check. None
+        for a uniform spacing.
     bedFitted : bool | None
         Lay the starting water in columns half a spacing clear of the bed
         (`sphParticles.bedFittedPoints`) rather than on the square lattice, whose lowest particles
@@ -430,6 +452,8 @@ class BreakingWave:
         self.frames: list[WaveFrame] = []
         self.packing: PackingResult | None = None
         self.wallClockSeconds = 0.0                 # [s]
+        self.mergedGroups = 0
+        self.mergedEnergy = 0.0                     # [J/m], kinetic energy the merges removed
         self._fluidMass = 0.0                       # [kg/m]
 
         self._validateInputs()
@@ -472,6 +496,7 @@ class BreakingWave:
                 raise InvalidInputError(f'Unknown refinement settings: {sorted(unknown)}.', parameterName = 'refinement',
                                         value = self.refinement)
             applyRules(self.refinement, refinementRules)
+            checkMergeBehind(self.refinement)
             if self.backend == 'compiled':
                 raise InvalidInputError('The compiled backend cannot split particles.', parameterName = 'refinement',
                                         value = self.refinement)
@@ -618,6 +643,7 @@ class BreakingWave:
             fluidPositions, fluidVelocities = solitaryWaveFluid(self.bathymetry, self.waveHeight, self.crestX, s)
         self.particles = ParticleSystem.assemble(fluidPositions, self.boundary.positions(), s, rho, fluidVelocities)
         self._fluidMass = float(self.particles.masses[0])          # [kg/m], of a particle that has not split
+        self.mergedGroups, self.mergedEnergy = 0, 0.0
 
         # The floor holds spray and the thin sheet of the runup, whose neighbors fly apart, off a
         # density near zero: the hydrostatic diffusion's expected difference grows as the pair's mean
@@ -833,12 +859,13 @@ class BreakingWave:
         '''
 
         Split the fluid in the zone that follows the tracked crest, a level at a time, until every
-        particle in it has split `refinement['levels']` times. Returns how many particles split.
+        particle in it has split `refinement['levels']` times, and merge the daughters more than
+        `refinement['mergeBehind']` behind the crest. Returns how many particles split.
 
         '''
 
         settings, d = self.refinement, self.depth
-        tracker, p = self.tracker, self.particles
+        tracker = self.tracker
         if not tracker.crestX:
             return 0
         crestX = tracker.crestX[-1]
@@ -849,12 +876,20 @@ class BreakingWave:
         floor = self.bathymetry.stillWaterLevel + settings['above'] * d
         total = 0
         for _ in range(int(settings['levels'])):
+            p = self.particles
             x, z = p.positions[:, 0], p.positions[:, -1]
             zone = p.isFluid & (x > low) & (x < high) & (z > floor)
             split = self.solver.refine(zone & (refinementLevels(p, self._fluidMass) < settings['levels']))
             total += split
             if split == 0:
                 break
+        if settings['mergeBehind'] is not None:
+            p = self.particles
+            behind = p.positions[:, 0] < crestX - settings['mergeBehind'] * d
+            if np.any(behind & (refinementLevels(p, self._fluidMass) > 0)):
+                merged = self.solver.merge(behind, self._fluidMass)
+                self.mergedGroups += merged.groups
+                self.mergedEnergy += merged.removedEnergy
 
         return total
 
@@ -913,6 +948,8 @@ class BreakingWave:
             'wallClockSeconds': self.wallClockSeconds,
             'broke': point is not None,
         }
+        if self.refinement is not None and self.refinement['mergeBehind'] is not None:
+            result.update({'mergedGroups': self.mergedGroups, 'mergedEnergy': self.mergedEnergy})
         if self.packing is not None:
             result.update({
                 'packingIterations': self.packing.iterations,
