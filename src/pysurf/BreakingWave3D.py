@@ -19,14 +19,20 @@ low-dissipation scheme in a rectangular tank over a height field.
                 viscosity, fluid density held at 0.9 rho0 or above; every wall free-slip
     sections    vertical planes y = constant on which a `waveBreaking.BreakingTracker` reads the
                 breaking point from the smoothed surface ('contour'): the fluid within
-                `sectionRows` / 2 spacings of the plane, each particle standing for
-                s^3 / (rows s) of the plane's area, so the plane holds as many particles per area
-                as a 2D run
-    snapshots   the whole fluid's positions and velocities at `recordTimes`, and each section's
-                fluid every `frameInterval`
+                `sectionRows` / 2 spacings of the plane, each particle standing for its volume over
+                the rows' width, s^3 / (rows s) of the plane's area unsplit, so the plane holds as
+                many particles per area as a 2D run
+    refinement  optionally, the fluid split (`WcsphSolver.refine`, keeping h) in a zone that
+                follows the crest: the tank is cut across y into strips, each strip's crest is
+                its highest fluid particle, and the zone reaches behind and ahead of that crest
+                along x, from a floor over still water up. Daughters stay split when the zone
+                moves on
+    snapshots   the whole fluid's positions, velocities and masses at `recordTimes`, and each
+                section's fluid every `frameInterval`
 
 `velocity` gives the flow at any points at a snapshot's time: the Shepard-normalized Wendland
-average of the fluid around each point within the kernel's support.
+average of the fluid around each point within the kernel's support, each particle weighted by its
+volume.
 
 A side wall disturbs the flow beside it. Over a flat bed at 32 particles per depth, 0.3 s after
 the start of a solitary wave of H/d = 0.3 between walls 1 d apart, the top of the particle row next
@@ -87,7 +93,20 @@ too shallow to read.
 tests/testBreakingWave3D.py checks the build: over a flat bed the start is the 2D exact wave in
 every lattice row, with the 2D rule's boundary pressures; a section reads its own two rows; and
 after a short run on the GPU the flow mid-depth under the crest lies within 5 percent of the exact
-wave's (2 percent at 8 and 16 particles per depth).
+wave's (2 percent at 8 and 16 particles per depth), with or without the crest's water split.
+
+The refinement zone in 3D is cross-checked against the 2D model, not validated: no measurement of
+a 3D overturn's lip exists. On gate 1's Surf Ranch reef with the bed uniform across y (the exact
+solitary wave of H/h0 = 0.6, bed-fitted columns, 32 particles per depth, the crest's water split
+once from the toe), a tank 1 h0 wide read on its middle section matches the 2D run split the same
+way within half the gates' tolerances, run outside the test suite (8.5 GPU hours): breaking time
+-0.35 percent, touchdown time -0.46 percent, Hb +1.2 percent, impact x -0.14 h0, H_I -0.5 percent,
+A_O/H^2 +1.8 percent, A_J/H^2 -0.4 percent, theta_O -0.6 degrees. Unsplit, the pair matches on
+breaking (time -0.25 percent, Hb +1.3 percent); both unsplit runs stop on a void that closes
+inside the crest, so neither reads a jet. The tests check that the zone splits the water it
+should, keeps the mass and the sections' water, and carries the exact wave. Daughters stay split,
+so a step's cost grows with the water the zone sweeps: 3.2 times the unsplit step by touchdown on
+that reef.
 
 Sean Bowman [11/10/2026]
 
@@ -107,23 +126,35 @@ from scipy.spatial import cKDTree
 # Local imports
 from pysurf import constants, waveTheory
 from pysurf.bathymetry import HeightField
-from pysurf.BreakingWave import defaultJitter, defaultPacking, jitteredFaceArc, latticeFaceArc
+from pysurf.bemSolver import JetGeometry
+from pysurf.BreakingWave import (defaultJitter, defaultPacking, jitteredFaceArc, latticeFaceArc, overturnMeasures,
+                                 refinementDefaults, refinementRules, touchdownJet)
 from pysurf.errors import InvalidInputError, NumericalInstabilityError
 from pysurf.sphBoundaries import HeightFieldBoundary
 from pysurf.sphPacking import PackingResult, packPoints
 from pysurf.sphParticles import ParticleSystem
+from pysurf.sphRefinement import refinementLevels
 from pysurf.sphSolver import SimulationConfig, WcsphSolver, taitDensity, taitEquationOfState
+from pysurf.validation import applyRules, numericRule
 from pysurf.waveBreaking import BreakingTracker
 from pysurf.waveMakers import exactSolitaryBoundaryPressure3D, exactSolitaryWaveFluid3D
+
+# `BreakingWave`'s crest-following zone, with the width in depths of the strips across y that each
+# read their own crest
+refinementDefaults3D = {**refinementDefaults, 'strip': 0.25}
+refinementRules3D = refinementRules + (
+    numericRule('strip', 'Refinement strip width across the tank', minimum = 0.0),
+)
 
 @dataclass
 class SectionFrame:
 
-    '''One section's fluid at an instant: positions [m] and velocities [m/s], shape (N, 3).'''
+    '''One section's fluid at an instant: positions [m] and velocities [m/s], shape (N, 3), and masses [kg].'''
 
     time: float
     positions: np.ndarray
     velocities: np.ndarray
+    masses: np.ndarray | None = None
 
 class BreakingWave3D:
 
@@ -188,6 +219,16 @@ class BreakingWave3D:
     faceArc : float | None
         The arc the sections' face slope is read over, in spacings (`waveBreaking.contourFace`);
         None for 2 when the start lies on its lattice and 6 when it is jittered
+    refinement : dict | None
+        Split the fluid in a zone that follows the crest (`WcsphSolver.refine`, keeping h), with
+        `BreakingWave`'s settings: 'levels' (1 to 3), 'behind', 'ahead' and 'above' in depths,
+        and 'fromX', the crest position the zone starts at [m], `searchFromX` by default; and
+        'strip', the width across y of the strips that each read their own crest, in depths.
+        Applied at every reading of the sections. A daughter keeps its mother's h and so meets
+        about eight times her neighbors: on the ridge at 16 particles per depth, splitting once
+        the starting crest's water above 0.15 depths over still water doubled the cost of a step,
+        and the full depth over 4.5 depths of the tank's length quadrupled it. Daughters stay
+        split, so the cost keeps growing as the zone sweeps new water. None for a uniform spacing
 
     '''
 
@@ -198,7 +239,8 @@ class BreakingWave3D:
                  wallTop: float | None = None, smoothingLengthRatio: float = 3.0, alphaViscosity: float = 0.01,
                  soundSpeedFactor: float = 10.0, backend: str = 'gpu', solverOptions: dict | None = None,
                  bedFitted: bool = True, startJitter: float | None = None, startSeed: int = 1,
-                 faceArc: float | None = None, startPacking: bool | None = None) -> None:
+                 faceArc: float | None = None, startPacking: bool | None = None,
+                 refinement: dict | None = None) -> None:
 
         self.field = field
         self.waveHeight = float(waveHeight)                 # [m]
@@ -226,6 +268,7 @@ class BreakingWave3D:
         self.startPacking = bool(startPacking if startPacking is not None else defaultPacking['deltaSph'])
         self.faceArc = float(faceArc if faceArc is not None
                              else jitteredFaceArc if self.startJitter > 0.0 else latticeFaceArc)
+        self.refinement = ({**refinementDefaults3D, **refinement} if refinement is not None else None)
         self._validateInputs()
 
         self.packing: PackingResult | None = None
@@ -235,7 +278,9 @@ class BreakingWave3D:
         self.trackers: dict[float, BreakingTracker] = {}
         self.sectionFrames: dict[float, list[SectionFrame]] = {}
         self.snapshots: dict[float, tuple[np.ndarray, np.ndarray]] = {}
+        self.snapshotMasses: dict[float, np.ndarray] = {}
         self.wallClockSeconds = 0.0
+        self._fluidMass = 0.0                       # [kg], of a particle that has not split
 
     # -- Private Helper Methods -- #
     def _validateInputs(self) -> None:
@@ -266,6 +311,15 @@ class BreakingWave3D:
         if not (1.0 <= self.faceArc <= 12.0):
             raise InvalidInputError('The face slope arc must lie from 1 to 12 spacings.', parameterName = 'faceArc',
                                     value = self.faceArc)
+        if self.refinement is not None:
+            unknown = set(self.refinement) - set(refinementDefaults3D)
+            if unknown:
+                raise InvalidInputError(f'Unknown refinement settings: {sorted(unknown)}.', parameterName = 'refinement',
+                                        value = self.refinement)
+            applyRules(self.refinement, refinementRules3D)
+            if self.backend not in ('numpy', 'gpu'):
+                raise InvalidInputError('Only the numpy and gpu backends split particles.', parameterName = 'refinement',
+                                        value = self.refinement)
 
     def _sectionMask(self, y: float) -> np.ndarray:
 
@@ -282,19 +336,81 @@ class BreakingWave3D:
 
         p, s = self.particles, self.spacing
         fluid = p.positions[p.isFluid]
+        # Each particle stands for its volume over the section's width; a daughter for an eighth
+        areas = p.masses[p.isFluid] / (self.solver.config.referenceDensity * self.sectionRows * s)
         for y, tracker in self.trackers.items():
-            members = fluid[self._sectionMask(y)]
-            tracker.update(self.solver.time, members[:, [0, 2]], np.full(len(members), s**2 / self.sectionRows))
+            mask = self._sectionMask(y)
+            tracker.update(self.solver.time, fluid[mask][:, [0, 2]], areas[mask])
 
     def _recordSections(self) -> None:
 
         '''Keep each section's fluid at this instant.'''
 
         p = self.particles
-        positions, velocities = p.positions[p.isFluid], p.velocities[p.isFluid]
+        positions, velocities, masses = p.positions[p.isFluid], p.velocities[p.isFluid], p.masses[p.isFluid]
         for y in self.sections:
             mask = self._sectionMask(y)
-            self.sectionFrames[y].append(SectionFrame(self.solver.time, positions[mask].copy(), velocities[mask].copy()))
+            self.sectionFrames[y].append(SectionFrame(self.solver.time, positions[mask].copy(), velocities[mask].copy(),
+                                                      masses[mask].copy()))
+
+    def _keepSnapshot(self, time: float) -> None:
+
+        '''Keep the whole fluid's positions, velocities and masses at `time` [s].'''
+
+        p = self.particles
+        self.snapshots[time] = (p.positions[p.isFluid].copy(), p.velocities[p.isFluid].copy())
+        self.snapshotMasses[time] = p.masses[p.isFluid].copy()
+
+    def _stripCrests(self, x: np.ndarray, y: np.ndarray, z: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+
+        '''
+
+        Cut the tank across y into strips `refinement['strip']` depths wide and read each strip's
+        crest as the x of its highest fluid particle. Returns each strip's crest [m], -inf where a
+        strip holds no fluid, and the strip each given particle lies in.
+
+        '''
+
+        field = self.field
+        width = self.refinement['strip'] * self.depth
+        count = max(1, int(math.ceil((field.endY - field.startY) / width - 1e-9)))
+        strip = np.clip(np.floor((y - field.startY) / width).astype(int), 0, count - 1)
+        # Sorted by strip, then height: the last particle of each strip is its highest
+        order = np.lexsort((z, strip))
+        last = np.flatnonzero(np.diff(strip[order], append = count))
+        crests = np.full(count, -np.inf)
+        crests[strip[order][last]] = x[order][last]
+
+        return crests, strip
+
+    def _refineCrest(self) -> int:
+
+        '''
+
+        Split the fluid in the zone that follows each strip's crest, a level at a time, until every
+        particle in it has split `refinement['levels']` times. Returns how many particles split.
+
+        '''
+
+        settings, d, p = self.refinement, self.depth, self.particles
+        fromX = settings['fromX'] if settings['fromX'] is not None else self.searchFromX
+        floor = self.field.stillWaterLevel + settings['above'] * d
+        total = 0
+        for _ in range(int(settings['levels'])):
+            fluid = np.flatnonzero(p.isFluid)
+            x, y, z = p.positions[fluid].T
+            crests, strip = self._stripCrests(x, y, z)
+            crest = crests[strip]
+            zone = ((crest >= fromX) & (x > crest - settings['behind'] * d) & (x < crest + settings['ahead'] * d)
+                    & (z > floor))
+            mask = np.zeros(p.nParticles, dtype = bool)
+            mask[fluid[zone]] = True
+            split = self.solver.refine(mask & (refinementLevels(p, self._fluidMass) < settings['levels']))
+            total += split
+            if split == 0:
+                break
+
+        return total
 
     # -- Public Methods -- #
     @property
@@ -351,6 +467,7 @@ class BreakingWave3D:
                                                                                    jitter = self.startJitter,
                                                                                    seed = self.startSeed, pack = pack)
         self.particles = ParticleSystem.assemble(fluidPositions, self.boundary.positions(), s, rho, fluidVelocities)
+        self._fluidMass = float(self.particles.masses[0])
 
         # `BreakingWave`'s deltaSph scheme (see its build for the reasons behind each setting)
         schemeOptions = dict(kernelType = 'wendlandC2', densityFilterInterval = 0, densityDiffusion = 'hydrostatic',
@@ -391,10 +508,10 @@ class BreakingWave3D:
         self.trackers = {y: BreakingTracker(field.section(y), s, faceReach = d, searchFromX = self.searchFromX,
                                             faceMeasure = 'contour', faceArc = self.faceArc) for y in self.sections}
         self.sectionFrames = {y: [] for y in self.sections}
-        self.snapshots = {}
+        self.snapshots, self.snapshotMasses = {}, {}
         self._recordSections()
         if any(abs(t) < 1e-12 for t in self.recordTimes):
-            self.snapshots[0.0] = (p.positions[p.isFluid].copy(), p.velocities[p.isFluid].copy())
+            self._keepSnapshot(0.0)
 
     def run(self, endTime: float | None = None, progress: bool = True, stopAt: str = 'end') -> None:
 
@@ -456,6 +573,8 @@ class BreakingWave3D:
             p = self.particles
             if solver.time >= nextTrack:
                 self._readSections()
+                if self.refinement is not None:
+                    self._refineCrest()
                 nextTrack += trackStep
             if solver.time >= nextFrame:
                 if not np.all(np.isfinite(p.positions)):
@@ -464,7 +583,7 @@ class BreakingWave3D:
                 self._recordSections()
                 nextFrame += self.frameInterval
             while pending and solver.time >= pending[0] - 1e-12:
-                self.snapshots[pending.pop(0)] = (p.positions[p.isFluid].copy(), p.velocities[p.isFluid].copy())
+                self._keepSnapshot(pending.pop(0))
             if progress and solver.time >= nextReport:
                 elapsed = timeModule.perf_counter() - started
                 broken = ('breaking recorded' if tracker.breakingFinal
@@ -481,8 +600,9 @@ class BreakingWave3D:
         '''
 
         The flow at points at a snapshot's time [m/s], shape (N, 3): the Shepard-normalized Wendland
-        average, at the smoothing length, of the fluid within the kernel's support of each point.
-        NaN where no fluid lies within reach.
+        average, at the smoothing length, of the fluid within the kernel's support of each point,
+        each particle weighted by its mass, which is its volume. NaN where no fluid lies within
+        reach.
 
         Raises:
         -------
@@ -494,6 +614,7 @@ class BreakingWave3D:
         if key is None or abs(key - time) > 1e-9:
             raise KeyError(f'No snapshot at t = {time} s; recordTimes holds {sorted(self.snapshots)}.')
         positions, velocities = self.snapshots[key]
+        masses = self.snapshotMasses.get(key, np.ones(len(positions)))
         h = self.smoothingLength
 
         points = np.atleast_2d(np.asarray(points, dtype = float))
@@ -503,15 +624,37 @@ class BreakingWave3D:
             if not neighbors:
                 continue
             q = np.linalg.norm(positions[neighbors] - points[index], axis = 1) / h
-            weights = np.maximum(1.0 - 0.5 * q, 0.0)**4 * (2.0 * q + 1.0)
+            weights = np.maximum(1.0 - 0.5 * q, 0.0)**4 * (2.0 * q + 1.0) * masses[neighbors]
             if weights.sum() > 0.0:
                 result[index] = weights @ velocities[neighbors] / weights.sum()
 
         return result
 
+    def overturn(self, y: float | None = None) -> JetGeometry | None:
+
+        '''
+
+        A section's jet and the tube under it on its surface just before touchdown, read as
+        `BreakingWave.overturn` reads them (`BreakingWave.touchdownJet`); None before touchdown.
+        y [m] picks the section, None the first.
+
+        '''
+
+        tracker = self.trackers.get(self.sections[0] if y is None else float(y))
+        if tracker is None or tracker.touchdownSurface is None:
+            return None
+
+        return touchdownJet(tracker.touchdownSurface, self.spacing, self.depth)
+
     def summary(self) -> dict:
 
-        '''Each section's breaking point and touchdown, and the run's size and cost.'''
+        '''
+
+        Each section's breaking point and, once its jet has landed, the touchdown's measures as
+        `BreakingWave.summary` reports them (`BreakingWave.overturnMeasures`), and the run's size
+        and cost.
+
+        '''
 
         sections = {}
         for y, tracker in self.trackers.items():
@@ -525,7 +668,10 @@ class BreakingWave3D:
                 'touchedDown': tracker.touchdownSurface is not None,
                 'touchdownTime': tracker.touchdownTime if tracker.touchdownSurface is not None else None,
             }
+            jet = self.overturn(y)
+            if jet is not None:
+                sections[y].update(overturnMeasures(tracker, jet, self.field.stillWaterLevel, self.depth))
 
         return {'particlesPerDepth': self.particlesPerDepth, 'fluidParticles': self.particles.nFluid,
                 'boundaryParticles': self.particles.nBoundary, 'time': self.solver.time,
-                'wallClockSeconds': self.wallClockSeconds, 'sections': sections}
+                'wallClockSeconds': self.wallClockSeconds, 'refinement': self.refinement, 'sections': sections}

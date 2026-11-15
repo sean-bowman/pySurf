@@ -9,7 +9,10 @@ boundary particles start with the 2D rule's pressure; laid in bed-fitted columns
 stands half a spacing above the bed and carries the 2D exact flow, and jittered off those columns
 it keeps its particles inside the water with the flow at each one's place; on the GPU a short run reads its section from
 the two rows around the plane at every tracker interval, and its snapshot gives the flow mid-depth
-under the crest within 5 percent of the exact wave's.
+under the crest within 5 percent of the exact wave's. With a refinement zone each strip across the
+tank reads its own crest, a split keeps the fluid's mass and the section's water and splits no
+particle twice at one level, and on the GPU a refined run splits its crest and still gives the
+exact flow mid-depth within 5 percent.
 
 Sean Bowman [11/10/2026]
 
@@ -148,6 +151,56 @@ def testAJitteredStartKeepsItsWaterAndCarriesTheFlowWhereItLies():
     with pytest.raises(InvalidInputError):
         BreakingWave3D(slope, 0.2, 1.0, depth = 1.0, startJitter = 0.5, backend = 'numpy')
 
+def testEachStripReadsItsOwnCrest(flat):
+
+    wave = BreakingWave3D(flat, height, crestX, depth = 1.0, particlesPerDepth = 8, backend = 'numpy',
+                          refinement = {'strip': 0.25})
+
+    # Two strips across the 0.5-wide tank; each crest is the x of its strip's highest particle
+    x = np.array([1.0, 2.0, 3.0, 1.5, 2.5])
+    y = np.array([0.1, 0.1, 0.1, 0.4, 0.4])
+    z = np.array([1.0, 1.2, 1.1, 1.3, 1.0])
+    crests, strip = wave._stripCrests(x, y, z)
+    assert crests.tolist() == [2.0, 1.5]
+    assert strip.tolist() == [0, 0, 0, 1, 1]
+
+def testTheZoneSplitsTheCrestsWaterAndKeepsItsMass(flat):
+
+    settings = {'behind': 0.5, 'ahead': 0.5, 'above': 0.05, 'fromX': 0.0}
+    wave = BreakingWave3D(flat, height, crestX, depth = 1.0, particlesPerDepth = 8, backend = 'numpy',
+                          refinement = settings)
+    wave.build()
+    p, s = wave.particles, wave.spacing
+    fluid = p.positions[p.isFluid]
+    crests, _ = wave._stripCrests(fluid[:, 0], fluid[:, 1], fluid[:, 2])
+    mass, count = p.masses[p.isFluid].sum(), p.nFluid
+    wave._recordSections()
+    sectionMass = wave.sectionFrames[0.25][-1].masses.sum()
+
+    split = wave._refineCrest()
+
+    # Each mother became eight daughters, the mass stayed, and every daughter lies in the zone
+    assert split > 0
+    assert p.nFluid == count + 7 * split
+    assert p.masses[p.isFluid].sum() == pytest.approx(mass, rel = 1e-12)
+    daughters = p.positions[p.isFluid & (p.masses < 0.5 * wave._fluidMass)]
+    assert len(daughters) == 8 * split
+    assert np.all(daughters[:, 0] > crests.min() - 0.5 - 0.25 * s)
+    assert np.all(daughters[:, 0] < crests.max() + 0.5 + 0.25 * s)
+    assert np.all(daughters[:, 2] > 1.05 - 0.25 * s)
+
+    # The section holds the same water: its rows' daughters stay inside its width
+    wave._recordSections()
+    assert wave.sectionFrames[0.25][-1].masses.sum() == pytest.approx(sectionMass, rel = 1e-12)
+
+    # A particle split once does not split again at one level; the zone's edges move with the
+    # crest, which a daughter raised a quarter spacing can shift by as much, and take in a few more
+    wave._refineCrest()
+    assert p.masses[p.isFluid].min() == pytest.approx(wave._fluidMass / 8.0, rel = 1e-12)
+
+    with pytest.raises(InvalidInputError):
+        BreakingWave3D(flat, height, crestX, depth = 1.0, backend = 'numpy', refinement = {'across': 1.0})
+
 wp = pytest.importorskip('warp')
 cuda = pytest.mark.skipif(wp.get_cuda_device_count() == 0, reason = 'needs a CUDA device')
 
@@ -177,3 +230,27 @@ def testAShortRunReadsItsSectionAndCarriesTheWave():
     exact, _, _ = waveTheory.exactSolitaryFlow(np.array([[crest, 0.5]]), height, 1.0, crest, 1.0)
     assert flow[0] == pytest.approx(exact[0, 0], rel = 0.05)
     assert abs(flow[1]) < 1e-3 * flow[0]
+
+@cuda
+def testARefinedRunSplitsItsCrestAndCarriesTheWave():
+
+    field = HeightField.fromFunction(lambda x, y: 0.0 * x, (0.0, 10.0, 0.0, 1.0), 1.0 / 32.0, stillWaterLevel = 1.0)
+    start, snapshotTime = 6.5, 0.1
+    wave = BreakingWave3D(field, height, start, particlesPerDepth = 8, recordTimes = (snapshotTime,), endTime = 0.2,
+                          refinement = {'fromX': 0.0, 'above': 0.1})
+    wave.build()
+    p = wave.particles
+    mass, count = p.masses[p.isFluid].sum(), p.nFluid
+
+    wave.run(progress = False)
+
+    # The crest's water split on the device and the run kept its mass and stayed finite
+    assert p.nFluid > count
+    assert p.masses[p.isFluid].sum() == pytest.approx(mass, rel = 1e-12)
+    assert np.all(np.isfinite(p.positions))
+
+    # Mid-depth under the crest, within the kernel's reach of the daughters, the flow is the exact wave's
+    crest = start + waveTheory.solitaryWaveSpeed(height, 1.0) * snapshotTime
+    flow = wave.velocity(np.array([[crest, 0.5, 0.5]]), snapshotTime)[0]
+    exact, _, _ = waveTheory.exactSolitaryFlow(np.array([[crest, 0.5]]), height, 1.0, crest, 1.0)
+    assert flow[0] == pytest.approx(exact[0, 0], rel = 0.05)

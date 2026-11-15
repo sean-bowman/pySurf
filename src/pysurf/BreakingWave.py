@@ -217,6 +217,53 @@ refinementRules = (
     numericRule('above',  'Refinement zone floor over still water', minimum = -10.0),
 )
 
+def touchdownJet(surface: np.ndarray, spacing: float, depth: float) -> JetGeometry:
+
+    '''
+
+    The jet and the tube under it on a surface at touchdown (`bemSolver.jetGeometry`). The surface,
+    shape (N, 2) in (x, z), is resampled at half a spacing of arc length, and the jet tip and impact
+    point must lie 0.3 depths of arc apart, as for the boundary element model's nodes at a crest
+    spacing of 0.02 d.
+
+    '''
+
+    step = 0.5 * spacing
+    arc = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(surface, axis = 0).T))])
+    samples = np.arange(0.0, arc[-1], step)
+    resampled = np.column_stack([np.interp(samples, arc, surface[:, 0]), np.interp(samples, arc, surface[:, 1])])
+
+    return jetGeometry(resampled, gap = max(4, int(round(0.3 * depth / step))))
+
+def overturnMeasures(tracker: BreakingTracker, jet: JetGeometry, stillWaterLevel: float, depth: float) -> dict:
+
+    '''
+
+    A touchdown's measures: its time, where the jet's tip and its impact point lie [m], the impact
+    height H_I (the surface's highest point over still water) over the depth, the tube's area and
+    the closed pocket's over d^2, and the overturn measures of Feddersen et al. (2023, 2024) as
+    `OverturningWave` reports them: A_O / H_I^2, A_J / H_I^2, W / L and theta_O [deg].
+
+    '''
+
+    impactHeight = float(np.max(tracker.touchdownSurface[:, 1])) - stillWaterLevel
+    pocket = tracker.touchdownPocket
+    pocketArea = 0.5 * abs(float(np.dot(pocket[:, 0], np.roll(pocket[:, 1], -1))
+                                 - np.dot(pocket[:, 1], np.roll(pocket[:, 0], -1))))
+
+    return {
+        'touchdownTime': tracker.touchdownTime,
+        'jetTipX': float(jet.tip[0]),
+        'impactX': float(jet.impactPoint[0]),
+        'impactHeightOverDepth': impactHeight / depth,
+        'cavityAreaOverDepthSquared': jet.cavityArea / depth**2,
+        'pocketAreaOverDepthSquared': pocketArea / depth**2,
+        'overturnAreaOverImpactHeightSquared': jet.cavityArea / impactHeight**2,
+        'jetAreaOverImpactHeightSquared': jet.jetArea / impactHeight**2,
+        'overturnAspectRatio': jet.aspectRatio,
+        'overturnAngle': jet.overturnAngle,
+    }
+
 @dataclass
 class WaveFrame:
 
@@ -831,12 +878,8 @@ class BreakingWave:
         surface = self.tracker.touchdownSurface if self.tracker is not None else None
         if surface is None:
             return None
-        step = 0.5 * self.spacing
-        arc = np.concatenate([[0.0], np.cumsum(np.hypot(*np.diff(surface, axis = 0).T))])
-        samples = np.arange(0.0, arc[-1], step)
-        resampled = np.column_stack([np.interp(samples, arc, surface[:, 0]), np.interp(samples, arc, surface[:, 1])])
 
-        return jetGeometry(resampled, gap = max(4, int(round(0.3 * self.depth / step))))
+        return touchdownJet(surface, self.spacing, self.depth)
 
     def summary(self) -> dict:
 
@@ -892,23 +935,7 @@ class BreakingWave:
         jet = self.overturn
         result['touchedDown'] = jet is not None
         if jet is not None:
-            tracker, d = self.tracker, self.depth
-            impactHeight = float(np.max(tracker.touchdownSurface[:, 1])) - self.bathymetry.stillWaterLevel
-            pocket = tracker.touchdownPocket
-            pocketArea = 0.5 * abs(float(np.dot(pocket[:, 0], np.roll(pocket[:, 1], -1))
-                                         - np.dot(pocket[:, 1], np.roll(pocket[:, 0], -1))))
-            result.update({
-                'touchdownTime': tracker.touchdownTime,
-                'jetTipX': float(jet.tip[0]),
-                'impactX': float(jet.impactPoint[0]),
-                'impactHeightOverDepth': impactHeight / d,
-                'cavityAreaOverDepthSquared': jet.cavityArea / d**2,
-                'pocketAreaOverDepthSquared': pocketArea / d**2,
-                'overturnAreaOverImpactHeightSquared': jet.cavityArea / impactHeight**2,
-                'jetAreaOverImpactHeightSquared': jet.jetArea / impactHeight**2,
-                'overturnAspectRatio': jet.aspectRatio,
-                'overturnAngle': jet.overturnAngle,
-            })
+            result.update(overturnMeasures(self.tracker, jet, self.bathymetry.stillWaterLevel, self.depth))
 
         return result
 
