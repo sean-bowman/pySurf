@@ -64,13 +64,21 @@ after 0.2 s against 0.0059 unsplit, inside the uniform tank's 0.01; its particle
 coarse spacings, against 0.22 unsplit, as the daughters settle out of their squares. The same
 tank on the GPU, split, merged back after 0.1 s and run to 0.2 s, stays inside both limits.
 
-Not validated on breaking. On the Surf Ranch overturn (`BreakingWave` with the fluid split once in
-a zone that follows the crest), four of the five touchdown criteria of Feddersen et al. (2024)
-pass at 64 particles per depth and two at 128; the overturn area is 18 and 21 percent small
-against a criterion of 15. Merging is checked on breaking against the same runs without it, a
-consistency check rather than a validation: on that overturn at 32 particles per depth, merging
-the daughters 1.5 depths behind the crest leaves all eight touchdown readings of the split run
-within 0.005 percent, in 2D and in a 3D tank one depth wide, and removes 2×10⁻⁵ and 1.1×10⁻⁴ of
+On breaking, splitting carries the breaking point and fails the overturn. In `BreakingWave`, from
+bed-fitted columns with the limited viscosity, the fluid split once with h kept from 1 depth behind
+the crest to 1.5 ahead and from 0.4 depths under still water up, merged 1.5 depths behind, was held
+to the criteria the uniform lattice of half its spacing passes (criteria set before the runs).
+Grilli et al.'s 1:35 slope passes at 32 and 64 particles per depth: breaking height +3.5 and +4.7
+percent, depth -11.4 and -4.5, inside 10 and 15. The Surf Ranch overturn against Feddersen et al.
+(2024) fails at both: at 32 the impact point lands 0.55 depths past the DNS's, against 0.5; at 64
+the overturn angle is 6.3 degrees low, against 5. Split, the impact height reaches the finer
+lattice's and the overturn area moves most of the way to it, but the angle moves away from the
+DNS, 2.0 and 1.2 degrees below the same base unsplit. Starting the zone at the first step or at
+the reef's toe instead moves no reading by more than 0.03 depths or 0.06 degrees.
+
+Merging is checked on breaking against the same runs without it, a consistency check rather than
+a validation: on the Surf Ranch overturn at 32 particles per depth, merging the daughters 1.5
+depths behind the crest leaves all eight touchdown readings of the split run within 0.005 percent, in 2D and in a 3D tank one depth wide, and removes 2×10⁻⁵ and 1.1×10⁻⁴ of
 the wave's energy.
 
 Sean Bowman [11/07/2026]

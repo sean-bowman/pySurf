@@ -87,9 +87,20 @@ lags Guyenne and Grilli's 2D result by 0.372 and 0.101 sqrt(h0/g) at 32 and 64 p
 (from the lattice 0.362, 0.132 and 0.041 at 32, 64 and 128). Less that 2D lag, the breaking
 point's shift from 2D to 3D matches theirs for every k from the lattice, within 0.12 sqrt(h0/g)
 in time and 0.1 h0 in position. From bed-fitted columns it matches within 0.02 sqrt(h0/g) and 0.15
-h0 at k = 0.25 and 0.34, and comes 0.11 to 0.27 sqrt(h0/g) early at k = 0.10, 0.17 and 0.50. Only
-the bed-fitted runs at k = 0.25 and 0.34 reach the jet's touchdown before the face runs into water
-too shallow to read.
+h0 at k = 0.25 and 0.34, and comes 0.11 to 0.27 sqrt(h0/g) early at k = 0.10, 0.17 and 0.50. No
+run reads the jet's touchdown. The bed-fitted runs at k = 0.25 and 0.34 stop on a pocket closing
+inside the curling lip, about 0.6 h0 above the water ahead, which the touchdown test takes for the
+tube; each holds one vertical run, so the breaking point is the same either way. The others run on
+until the face runs into water too shallow to read.
+
+With the crest's water split, the breaking point at k = 0.25 passes (phase 4's exit gate, run
+outside the test suite, 27.9 GPU hours). From bed-fitted columns at 32 particles per depth, split
+once with h kept from 1 h0 behind each strip's crest to 1.5 ahead and from 0.4 h0 under still
+water up, from x = 12 h0, merging 1.5 h0 behind: breaking time +2.9 percent, crest position +0.39
+h0 and crest height -0.2 percent (unsplit +4.7, +0.53 and -1.9); speed -0.6 percent and spanwise
+ratio +1.0 percent. That run reads no touchdown: the jet lands against the tank's end wall after
+the face reader has turned from the overhang. In 2D the same zone fails the Surf Ranch overturn
+(`pysurf.BreakingWave`).
 tests/testBreakingWave3D.py checks the build: over a flat bed the start is the 2D exact wave in
 every lattice row, with the 2D rule's boundary pressures; a section reads its own two rows; and
 after a short run on the GPU the flow mid-depth under the crest lies within 5 percent of the exact

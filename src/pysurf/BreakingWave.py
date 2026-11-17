@@ -94,6 +94,14 @@ of the time, and split twice follows uniform 256 until 0.1 s before impact, wher
 near the kernel's reach; the default floor, 0.15 d over still water, holds the lip to 61 percent at
 either level.
 
+With the limited term from bed-fitted columns, split once 1 d behind the crest to 1.5 ahead from
+0.4 d under still water up, merging 1.5 d behind, and held to what the uniform lattice of half the
+spacing passes: Grilli et al.'s 1:35 slope passes at 32 and 64 particles per depth (breaking height
++3.5 and +4.7 percent, depth -11.4 and -4.5), and the Surf Ranch overturn fails at both, on the
+impact point at 32 (0.55 d past the DNS's, against 0.5) and the overturn angle at 64 (6.3 degrees
+low, against 5). Split, the overturn angle sits below the same base's unsplit angle, which each
+halving of a uniform spacing raises.
+
 A tank of still water, after 20 sqrt(d / g), keeps an rms speed of 7.1×10^-4 sqrt(g d) and a fastest
 of 3.2×10^-3 at 60 particles per depth, inside a criterion of 10^-3 on the rms and 10^-2 on the
 fastest; at 30 the rms reaches 1.4×10^-3. That criterion replaced one of 10^-3 on the fastest
