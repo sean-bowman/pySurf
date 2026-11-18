@@ -17,8 +17,12 @@ a constant slope rising through the still water line.
 
 A `HeightField` is a bed in 3D: z_b on a regular (x, y) grid, interpolated by cubic convolution
 (Keys 1981), with its gradient and normal. `HeightField.fromFunction` samples an analytic bed onto
-a grid, and `HeightField.ridge` builds the sloping ridge of Guyenne and Grilli (2006). A section at
-fixed y is a `Bathymetry`, for the 2D measures.
+a grid, `HeightField.ridge` builds the sloping ridge of Guyenne and Grilli (2006), and
+`HeightField.fromGridFile` reads a text grid of x, y and z (or depth) rows. `smoothed` passes a
+bed through a Gaussian, so features shorter than the particles can hold drop out, `cropped`
+keeps the region a wave crosses, `rotated` turns a bed so a wave arriving at an angle travels
+along +x, and `shoalingStart` finds where the bed first rises under the wave. A section at fixed y
+is a `Bathymetry`, for the 2D measures.
 
 References:
 -----------
@@ -35,7 +39,13 @@ Nothing here is a model: the bed is geometry given as input, and the queries are
 along it. tests/testBathymetry.py checks each profile query against the closed form for a plane
 beach (elevation, depth, shoreline position, slope, normal direction), and the height field's
 interpolation against a quadratic surface, which cubic convolution reproduces exactly, its gradient
-against the quadratic's, and its values at the grid points against the sampled function.
+against the quadratic's, and its values at the grid points against the sampled function. The
+smoothing is checked against the Gaussian's transform: a sinusoid keeps exp(-k^2 sigma^2 / 2) of
+its amplitude to 4×10⁻⁵, the weight dropped beyond four sigma, uniformly to the edges; and a plane
+passes unchanged. A crop reads its parent's elevation and gradient to rounding, and a text grid
+written from a field, its rows shuffled, reads back to it. A bed of second degree turned through
+any angle matches the closed form to rounding, and the shoaling start falls on the grid column
+where a plane beach first rises past the share.
 
 Sean Bowman [10/11/2026]
 
@@ -322,6 +332,41 @@ def convolutionSlopeWeights(u: np.ndarray) -> np.ndarray:
 
     return np.stack([-1.5 * u2 + 2.0 * u - 0.5, 4.5 * u2 - 5.0 * u, -4.5 * u2 + 4.0 * u + 0.5, 1.5 * u2 - u])
 
+def gaussianAlong(values: np.ndarray, sigma: float, step: float, axis: int) -> np.ndarray:
+
+    '''
+
+    A Gaussian of standard deviation `sigma` applied along one axis of a grid of spacing `step`:
+    the weights sampled at the grid points to four sigma and summed to one. The ends are padded by
+    odd reflection, 2 v_end - v_mirror, which continues a straight line exactly.
+
+    Raises:
+    -------
+    InvalidInputError : If four sigma reaches past the far end of the axis.
+
+    '''
+
+    reach = int(math.ceil(4.0 * sigma / step))
+    values = np.moveaxis(np.asarray(values, dtype = float), axis, -1)
+    count = values.shape[-1]
+    if reach > count - 1:
+        raise InvalidInputError(f'A smoothing length of {sigma:g} reaches {reach} grid steps, past the grid of '
+                                f'{count}.', parameterName = 'sigma', value = sigma)
+    offsets = np.arange(-reach, reach + 1)
+    weights = np.exp(-0.5 * (offsets * step / sigma)**2)
+    weights /= weights.sum()
+
+    index = np.arange(-reach, count + reach)
+    mirror = np.where(index < 0, -index, np.where(index > count - 1, 2 * (count - 1) - index, index))
+    padded = values[..., mirror]
+    padded = np.where(index < 0, 2.0 * values[..., :1] - padded, padded)
+    padded = np.where(index > count - 1, 2.0 * values[..., -1:] - padded, padded)
+    result = np.zeros_like(values)
+    for offset, weight in enumerate(weights):
+        result += weight * padded[..., offset:offset + count]
+
+    return np.moveaxis(result, -1, axis)
+
 class HeightField:
 
     '''
@@ -506,6 +551,66 @@ class HeightField:
         return cls.fromFunction(elevation, bounds, gridSpacing if gridSpacing is not None else depth / 64.0,
                                 stillWaterLevel = depth)
 
+    @classmethod
+    def fromGridFile(cls, path, stillWaterLevel: float, bounds: tuple | None = None,
+                     depths: bool = False) -> HeightField:
+
+        '''
+
+        A bed read from a text grid: one point a row, its x, y and z separated by spaces, tabs or
+        commas, the rows in any order, '#' starting a comment. The points must fill a regular grid,
+        each grid point once.
+
+        Parameters:
+        -----------
+        path : str | Path
+            The text grid
+        stillWaterLevel : float
+            Elevation of still water [m]
+        bounds : tuple | None
+            (startX, endX, startY, endY), the region the bed covers [m]; None for the whole grid
+        depths : bool
+            The third column holds depths below still water, positive down, rather than
+            elevations; each becomes stillWaterLevel - depth
+
+        Raises:
+        -------
+        InvalidInputError : If a row does not hold three numbers, a value is not finite, a grid point
+            repeats or is missing, or the grid is not regular.
+
+        '''
+
+        with open(path, encoding = 'utf-8') as handle:
+            rows = [line.split('#', 1)[0].replace(',', ' ').split() for line in handle]
+        rows = [row for row in rows if row]
+        try:
+            points = np.array(rows, dtype = float)
+        except ValueError as error:
+            raise InvalidInputError('Each row of a text grid must hold three numbers: x, y and z.',
+                                    parameterName = 'path', value = str(path)) from error
+        if points.ndim != 2 or points.shape[1] != 3:
+            raise InvalidInputError('Each row of a text grid must hold three numbers: x, y and z.',
+                                    parameterName = 'path', value = str(path))
+        if not np.all(np.isfinite(points)):
+            raise InvalidInputError('Text grid values must be finite.', parameterName = 'path', value = str(path))
+
+        # Coordinates written with rounding noise still name one grid line each
+        x, y = np.round(points[:, 0], 9), np.round(points[:, 1], 9)
+        gridX, gridY = np.unique(x), np.unique(y)
+        if gridX.size * gridY.size != len(points):
+            raise InvalidInputError(f'The text grid holds {len(points)} points, not the {gridX.size} by {gridY.size} '
+                                    'its x and y values span.', parameterName = 'path', value = str(path))
+        z = np.full((gridY.size, gridX.size), np.nan)
+        z[np.searchsorted(gridY, y), np.searchsorted(gridX, x)] = points[:, 2]
+        # With the count right, a repeated point leaves another empty
+        if np.isnan(z).any():
+            raise InvalidInputError('A grid point repeats in the text grid, and another is missing.',
+                                    parameterName = 'path', value = str(path))
+        if depths:
+            z = float(stillWaterLevel) - z
+
+        return cls(gridX, gridY, z, stillWaterLevel, bounds = bounds)
+
     # -- Public Methods -- #
     @property
     def spacingX(self) -> float:
@@ -564,6 +669,43 @@ class HeightField:
 
         return np.maximum(0.0, self.stillWaterLevel - self.elevation(x, y))
 
+    def shoalingStart(self, depth: float | None = None, share: float = 0.05) -> float | None:
+
+        '''
+
+        Where the bed starts to shoal: the first grid column inside the bounds, going shoreward, at
+        which the still water depth somewhere across y falls below (1 - share) of the offshore
+        depth [m]; None if it never does.
+
+        Parameters:
+        -----------
+        depth : float | None
+            The offshore depth [m]; None for the deepest still water along the offshore edge
+        share : float
+            The share of the depth the bed must rise by, from 0 to 1
+
+        '''
+
+        if not 0.0 < share < 1.0:
+            raise InvalidInputError('The shoaling share must lie between 0 and 1.', parameterName = 'share', value = share)
+        startX, endX, startY, endY = self.bounds
+        inX = (self.x >= startX - 1e-9) & (self.x <= endX + 1e-9)
+        inY = (self.y >= startY - 1e-9) & (self.y <= endY + 1e-9)
+        depths = self.stillWaterLevel - self.z[np.ix_(inY, inX)]
+        depth = self.offshoreDepth() if depth is None else float(depth)
+        shoaled = np.nonzero(depths.min(axis = 0) < (1.0 - share) * depth)[0]
+
+        return float(self.x[inX][shoaled[0]]) if shoaled.size else None
+
+    def offshoreDepth(self) -> float:
+
+        '''The deepest still water along the offshore edge, x = startX, at the grid's y inside the bounds [m].'''
+
+        inY = (self.y >= self.startY - 1e-9) & (self.y <= self.endY + 1e-9)
+        y = self.y[inY]
+
+        return float(np.max(self.stillWaterLevel - self.elevation(np.full(y.size, self.startX), y)))
+
     def lowestElevation(self) -> float:
 
         '''The lowest bed elevation at the grid points inside the bounds [m].'''
@@ -587,3 +729,122 @@ class HeightField:
         x = np.concatenate([[self.startX], inside, [self.endX]])
 
         return Bathymetry(x, self.elevation(x, np.full_like(x, float(y))), self.stillWaterLevel)
+
+    def smoothed(self, sigma: float) -> HeightField:
+
+        '''
+
+        The bed under a Gaussian of standard deviation `sigma`, applied on the grid along x, then y.
+        A sinusoid of wavenumber k keeps exp(-k^2 sigma^2 / 2) of its amplitude, to 10^-4 with the
+        weights stopping at four sigma, so features much shorter than sigma vanish and features
+        much longer pass. Each edge is padded by odd reflection, 2 z_edge - z_mirror, which
+        continues a plane exactly, so a plane passes unchanged up to the edges.
+
+        Parameters:
+        -----------
+        sigma : float
+            Standard deviation of the Gaussian [m]; its reach, four sigma, must fit inside the grid
+            on each axis
+
+        Raises:
+        -------
+        InvalidInputError : If sigma is not positive, or reaches past the grid.
+
+        '''
+
+        sigma = float(sigma)
+        if not sigma > 0.0:
+            raise InvalidInputError('The smoothing length must be positive.', parameterName = 'sigma', value = sigma)
+        z = gaussianAlong(self.z, sigma, self.spacingX, axis = 1)
+        z = gaussianAlong(z, sigma, self.spacingY, axis = 0)
+
+        return HeightField(self.x, self.y, z, self.stillWaterLevel, bounds = self.bounds)
+
+    def cropped(self, bounds: tuple) -> HeightField:
+
+        '''
+
+        The bed over a smaller region: the grid points within `bounds` and the cells beyond them
+        that the interpolation reaches, where this grid has them, so every elevation and gradient
+        inside `bounds` matches this field's to rounding.
+
+        Parameters:
+        -----------
+        bounds : tuple
+            (startX, endX, startY, endY), inside this field's bounds [m]
+
+        Raises:
+        -------
+        InvalidInputError : If the region is empty or reaches past this field's bounds.
+
+        '''
+
+        startX, endX, startY, endY = (float(value) for value in bounds)
+        ownStartX, ownEndX, ownStartY, ownEndY = self.bounds
+        inside = (ownStartX - 1e-9 <= startX < endX <= ownEndX + 1e-9
+                  and ownStartY - 1e-9 <= startY < endY <= ownEndY + 1e-9)
+        if not inside:
+            raise InvalidInputError("A crop must lie inside the field's bounds.", parameterName = 'bounds',
+                                    value = bounds)
+
+        # A query in cell i reads grid points i - 1 to i + 2; one more on each side covers rounding
+        kept = []
+        for axis, step, low, high in ((self.x, self.spacingX, startX, endX), (self.y, self.spacingY, startY, endY)):
+            first = max(0, int(math.floor((low - axis[0]) / step + 1e-9)) - 2)
+            last = min(axis.size - 1, int(math.floor((high - axis[0]) / step + 1e-9)) + 3)
+            kept.append(slice(first, last + 1))
+
+        return HeightField(self.x[kept[0]], self.y[kept[1]], self.z[kept[1], kept[0]], self.stillWaterLevel,
+                           bounds = (startX, endX, startY, endY))
+
+    def rotated(self, direction: float, bounds: tuple, pivot: tuple | None = None,
+                gridSpacing: float | None = None) -> HeightField:
+
+        '''
+
+        The bed in a frame turned so that a wave travelling in `direction` over this field travels
+        along +x. A point p' of the turned frame lies at pivot + R (p' - pivot) here, R the
+        counterclockwise rotation through `direction`, so the pivot keeps its coordinates. The
+        turned bed is this one's interpolation sampled on a new grid over `bounds`; a bed of second
+        degree turns exactly, as cubic convolution reproduces it in both frames.
+
+        Parameters:
+        -----------
+        direction : float
+            The wave's direction of travel over this field, counterclockwise from +x [deg]
+        bounds : tuple
+            (startX, endX, startY, endY), the region in the turned frame [m]; turned back, it must
+            lie inside this field's bounds
+        pivot : tuple | None
+            (x, y), the point the frame turns about [m]; None for the centre of this field's bounds
+        gridSpacing : float | None
+            The new grid's step [m]; None for the smaller of this grid's two
+
+        Raises:
+        -------
+        InvalidInputError : If the region, turned back, reaches past this field's bounds.
+
+        '''
+
+        angle = math.radians(float(direction))
+        cosine, sine = math.cos(angle), math.sin(angle)
+        if pivot is None:
+            pivot = (0.5 * (self.startX + self.endX), 0.5 * (self.startY + self.endY))
+        pivotX, pivotY = (float(value) for value in pivot)
+
+        def toSource(x: np.ndarray, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+            dx, dy = x - pivotX, y - pivotY
+            return pivotX + cosine * dx - sine * dy, pivotY + sine * dx + cosine * dy
+
+        # The region and this field's bounds are both rectangles, so the corners decide
+        startX, endX, startY, endY = (float(value) for value in bounds)
+        cornersX, cornersY = toSource(np.array([startX, endX, endX, startX]), np.array([startY, startY, endY, endY]))
+        inside = (cornersX.min() >= self.startX - 1e-9 and cornersX.max() <= self.endX + 1e-9
+                  and cornersY.min() >= self.startY - 1e-9 and cornersY.max() <= self.endY + 1e-9)
+        if not inside:
+            raise InvalidInputError("The turned region must lie inside the field's bounds.", parameterName = 'bounds',
+                                    value = bounds)
+        step = float(gridSpacing) if gridSpacing is not None else min(self.spacingX, self.spacingY)
+
+        return HeightField.fromFunction(lambda x, y: self.elevation(*toSource(x, y)), (startX, endX, startY, endY),
+                                        step, self.stillWaterLevel)

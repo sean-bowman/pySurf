@@ -12,7 +12,9 @@ the two rows around the plane at every tracker interval, and its snapshot gives 
 under the crest within 5 percent of the exact wave's. With a refinement zone each strip across the
 tank reads its own crest, a split keeps the fluid's mass and the section's water and splits no
 particle twice at one level, and on the GPU a refined run splits its crest and still gives the
-exact flow mid-depth within 5 percent.
+exact flow mid-depth within 5 percent. A wave arriving at an angle meets the bed turned so it
+travels along +x, a region crops the bed, and the wave starts a half length offshore of where the
+bed shoals, with the wall a half length behind it.
 
 Sean Bowman [11/10/2026]
 
@@ -28,7 +30,7 @@ from pysurf.bathymetry import Bathymetry, HeightField
 from pysurf.errors import InvalidInputError
 from pysurf.sphBoundaries import HeightFieldBoundary
 from pysurf.sphRefinement import refinementLevels
-from pysurf.BreakingWave3D import BreakingWave3D
+from pysurf.BreakingWave3D import BreakingWave3D, offshoreReach
 from pysurf.waveMakers import (exactFlowInChunks, exactSolitaryBoundaryPressure, exactSolitaryBoundaryPressure3D,
                                exactSolitaryWaveFluid, exactSolitaryWaveFluid3D)
 
@@ -321,3 +323,43 @@ def testMergingBehindTheCrestLeavesTheFlowUnderItAlone():
     assert merged.mergedGroups > 0
     assert merged.particles.nFluid == split.particles.nFluid - 7 * merged.mergedGroups
     assert runs['merged'][1][0] == pytest.approx(runs['split'][1][0], rel = 0.01)
+
+def testAWaveArrivingAtAnAngleMeetsTheTurnedBed():
+
+    # A bed rising along y; a wave travelling along +y meets it along +x in the turned frame
+    field = HeightField.fromFunction(lambda x, y: 0.02 * (y + 4.0)**2 + 0.0 * x, (-4.0, 4.0, -4.0, 4.0), 1.0 / 16.0,
+                                     stillWaterLevel = 1.0)
+    region = (-3.0, 3.0, -2.0, 2.0)
+    wave = BreakingWave3D(field, 0.2, -1.0, depth = 1.0, particlesPerDepth = 4, backend = 'numpy', direction = 90.0,
+                          region = region, pivot = (0.0, 0.0))
+    x, y = np.linspace(-3.0, 3.0, 7), np.full(7, 1.5)
+
+    assert wave.field.bounds == region
+    # The turned frame's (x, y) lies at (-y, x) over the given bed
+    assert wave.field.elevation(x, y) == pytest.approx(field.elevation(-y, x), abs = 1e-12)
+    assert wave.field.elevation(x, y) == pytest.approx(0.02 * (x + 4.0)**2, abs = 1e-12)
+
+def testARegionCropsTheBedAndAnAngleNeedsOne(flat):
+
+    wave = BreakingWave3D(flat, height, crestX, depth = 1.0, particlesPerDepth = 8, backend = 'numpy',
+                          region = (1.0, 5.0, 0.0, 0.5))
+
+    assert wave.field.bounds == (1.0, 5.0, 0.0, 0.5)
+    assert wave.direction == 0.0
+    with pytest.raises(InvalidInputError):
+        BreakingWave3D(flat, height, crestX, depth = 1.0, backend = 'numpy', direction = 20.0)
+
+def testTheWaveStartsAHalfLengthOffshoreOfTheShoaling():
+
+    field = HeightField.fromFunction(lambda x, y: np.maximum(x - 20.0, 0.0) / 20.0 + 0.0 * y, (0.0, 40.0, 0.0, 1.0),
+                                     0.05, stillWaterLevel = 1.0)
+    halfLength = waveTheory.solitaryWaveHalfLength(0.6, 1.0, 0.01)
+    wallX, crestX = offshoreReach(field, 0.6)
+
+    assert crestX == pytest.approx(field.shoalingStart() - halfLength)
+    assert wallX == pytest.approx(crestX - halfLength)
+    # The first-order wave's front at the shoaling bed and its back at the wall stand at 1 percent of H
+    tails = waveTheory.solitaryWaveProfile(np.array([wallX, field.shoalingStart()]), 0.6, 1.0, crestX)
+    assert tails == pytest.approx(0.006)
+    with pytest.raises(InvalidInputError):
+        offshoreReach(field.cropped((15.0, 40.0, 0.0, 1.0)), 0.6)

@@ -7,7 +7,9 @@ A solitary wave breaking over a bed of any shape, run in SPH on its own: `Breaki
 low-dissipation scheme in a rectangular tank over a height field.
 
     tank        the bed (`bathymetry.HeightField`) with free-slip walls on its bounds
-                (`sphBoundaries.HeightFieldBoundary`)
+                (`sphBoundaries.HeightFieldBoundary`); for a wave arriving at an angle, the bed
+                turned so the wave travels along +x (`direction`, `HeightField.rotated`), its side
+                walls then running along the wave
     start       the exact potential flow solitary wave of height H in water `depth` deep, its crest
                 at `crestX` and straight along y (`waveMakers.exactSolitaryWaveFluid3D`), with its
                 pressure, in columns half a spacing clear of the bed (`bedFitted`) or on the
@@ -27,6 +29,9 @@ low-dissipation scheme in a rectangular tank over a height field.
                 its highest fluid particle, and the zone reaches behind and ahead of that crest
                 along x, from a floor over still water up. Daughters stay split when the zone
                 moves on
+    reach       `offshoreReach` places the crest a half length offshore of where the bed starts to
+                shoal and the tank's offshore wall a half length behind it, so the wave crosses
+                as little water as it can before it breaks
     snapshots   the whole fluid's positions, velocities and masses at `recordTimes`, and each
                 section's fluid every `frameInterval`
 
@@ -104,7 +109,21 @@ the face reader has turned from the overhang. In 2D the same zone fails the Surf
 tests/testBreakingWave3D.py checks the build: over a flat bed the start is the 2D exact wave in
 every lattice row, with the 2D rule's boundary pressures; a section reads its own two rows; and
 after a short run on the GPU the flow mid-depth under the crest lies within 5 percent of the exact
-wave's (2 percent at 8 and 16 particles per depth), with or without the crest's water split.
+wave's (2 percent at 8 and 16 particles per depth), with or without the crest's water split; that
+a wave arriving at an angle meets the bed turned so it travels along +x; and that `offshoreReach`
+leaves the first-order wave's tails at 1 percent of its height at the shoaling bed and the wall.
+
+A wave arriving at an angle is checked against the closed form for an endless oblique reef, run
+outside the test suite. There the flow is a pattern travelling along the contours, so the crest
+crosses the span at c0 / tan of the angle. The test bed is the Surf Ranch profile turned 30 degrees,
+at 16 particles per depth. In a tank 16 h0 across, the crest's passage at each distance from 2 h0
+before the toe to 11 h0 past it crosses 14 sections within 1.7 percent of c0 / tan 30; in a tank
+8 h0 across, within 3.5 percent. The breaking point does not hold its distance past the toe: the
+break crosses 9 to 11 percent slower than c0 / tan 30 in the wide tank and 15 to 21 percent slower
+in the narrow one. The free-slip walls mirror the bed into a chevron reef, and the wall at its point
+moves the breaking point over the first 3 h0. In the interior the breaking point creeps shoreward
+by an amount the runs do not split between the incident wave's numerical decay and the far wall.
+That is a limit of a tank between free-slip walls; the closed form covers the crest only.
 
 The refinement zone in 3D is cross-checked against the 2D model, not validated: no measurement of
 a 3D overturn's lip exists. On gate 1's Surf Ranch reef with the bed uniform across y (the exact
@@ -158,6 +177,52 @@ refinementDefaults3D = {**refinementDefaults, 'strip': 0.25}
 refinementRules3D = refinementRules + (
     numericRule('strip', 'Refinement strip width across the tank', minimum = 0.0),
 )
+
+def offshoreReach(field: HeightField, waveHeight: float, depth: float | None = None, share: float = 0.05,
+                  fraction: float = 0.01) -> tuple[float, float]:
+
+    '''
+
+    Where to start the solitary wave and where the tank's offshore wall can stand, so that the
+    wave crosses as little water as it can before it breaks: the crest a half length offshore of
+    where the bed starts to shoal (`HeightField.shoalingStart`), so the wave's front meets the
+    shoaling bed at `fraction` of its height, and the wall a further half length offshore, so its
+    back leaves the wall at that fraction. The half length is the first-order wave's
+    (`waveTheory.solitaryWaveHalfLength`); the exact wave decays faster, so its tails stand lower.
+
+    Parameters:
+    -----------
+    field : HeightField
+        The bed, turned so the wave travels along +x
+    waveHeight : float
+        Solitary wave height H [m]
+    depth : float | None
+        The offshore still water depth [m]; None for the deepest along the field's offshore edge
+    share, fraction : float
+        The rise that marks shoaling, as a share of the depth, and the tail height left at the
+        shoaling bed and at the wall, as a fraction of H
+
+    Returns:
+    --------
+    tuple : (wallX, crestX), the offshore wall's position and the crest's [m]
+
+    Raises:
+    -------
+    InvalidInputError : If the bed does not shoal, or the wall would stand offshore of the field.
+
+    '''
+
+    depth = field.offshoreDepth() if depth is None else float(depth)
+    shoal = field.shoalingStart(depth, share)
+    if shoal is None:
+        raise InvalidInputError('The bed never rises far enough to shoal the wave.', parameterName = 'field')
+    halfLength = waveTheory.solitaryWaveHalfLength(float(waveHeight), depth, fraction)     # [m]
+    crestX, wallX = shoal - halfLength, shoal - 2.0 * halfLength
+    if wallX < field.startX - 1e-9:
+        raise InvalidInputError(f'The tank needs its offshore wall at x = {wallX:.3f}, offshore of the bed, which starts '
+                                f'at {field.startX:.3f}.', parameterName = 'field', value = field.bounds)
+
+    return wallX, crestX
 
 @dataclass
 class SectionFrame:
@@ -244,6 +309,18 @@ class BreakingWave3D:
         doubled the cost of a step, and the full depth over 4.5 depths of the tank's length
         quadrupled it. Daughters that stay split make the cost grow as the zone sweeps new water;
         merging them behind the crest bounds it. None for a uniform spacing
+    direction : float
+        The wave's direction of travel over `field`, counterclockwise from +x [deg]. The bed turns
+        (`HeightField.rotated`) so the wave travels along +x, and `crestX`, `sections`,
+        `searchFromX` and the refinement's 'fromX' are positions in the turned frame. The side
+        walls then run along the wave, so their free slip holds exactly for it and only water the
+        bed turns aside meets them
+    region : tuple | None
+        (startX, endX, startY, endY), the tank in the turned frame [m], needed when `direction` is
+        not 0; with `direction` 0 it crops `field` (`HeightField.cropped`). None keeps `field`'s
+        bounds
+    pivot : tuple | None
+        (x, y), the point of `field` the bed turns about [m]; None for the centre of its bounds
 
     '''
 
@@ -255,8 +332,17 @@ class BreakingWave3D:
                  soundSpeedFactor: float = 10.0, backend: str = 'gpu', solverOptions: dict | None = None,
                  bedFitted: bool = True, startJitter: float | None = None, startSeed: int = 1,
                  faceArc: float | None = None, startPacking: bool | None = None,
-                 refinement: dict | None = None) -> None:
+                 refinement: dict | None = None, direction: float = 0.0, region: tuple | None = None,
+                 pivot: tuple | None = None) -> None:
 
+        self.direction = float(direction)                   # [deg]
+        if self.direction != 0.0:
+            if region is None:
+                raise InvalidInputError('A wave arriving at an angle needs the tank region in the turned frame.',
+                                        parameterName = 'region', value = region)
+            field = field.rotated(self.direction, region, pivot = pivot)
+        elif region is not None:
+            field = field.cropped(region)
         self.field = field
         self.waveHeight = float(waveHeight)                 # [m]
         self.crestX = float(crestX)                         # [m]
@@ -719,7 +805,8 @@ class BreakingWave3D:
 
         result = {'particlesPerDepth': self.particlesPerDepth, 'fluidParticles': self.particles.nFluid,
                   'boundaryParticles': self.particles.nBoundary, 'time': self.solver.time,
-                  'wallClockSeconds': self.wallClockSeconds, 'refinement': self.refinement, 'sections': sections}
+                  'wallClockSeconds': self.wallClockSeconds, 'refinement': self.refinement, 'direction': self.direction,
+                  'region': self.field.bounds, 'sections': sections}
         if self.refinement is not None and self.refinement['mergeBehind'] is not None:
             result.update({'mergedGroups': self.mergedGroups, 'mergedEnergy': self.mergedEnergy})
 

@@ -154,3 +154,141 @@ def testIrregularHeightFieldsAreRejected(arguments):
 
     with pytest.raises(InvalidInputError):
         HeightField(stillWaterLevel = 1.0, **arguments)
+
+def plane(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+
+    return 0.3 + 0.05 * x - 0.02 * y
+
+def testSmoothingKeepsTheGaussianTransformOfASinusoid():
+
+    # The grid ends on nodes of the sine, where odd reflection continues it exactly
+    step, sigma, wavelength = 0.05, 0.1, 1.0
+    k = 2.0 * math.pi / wavelength
+    field = HeightField.fromFunction(lambda x, y: 0.2 * np.sin(k * x) + 0.0 * y, (0.0, 3.0, 0.0, 1.0), step,
+                                     stillWaterLevel = 1.0, padding = 0)
+    smooth = field.smoothed(sigma)
+    away = np.abs(field.z) > 0.05
+    kept = smooth.z[away] / field.z[away]
+
+    # The same share everywhere, edges included; the weights stop at four sigma, so the share
+    # departs from the transform by 4e-5
+    assert kept.max() - kept.min() < 1e-12
+    assert kept == pytest.approx(math.exp(-0.5 * (k * sigma)**2), rel = 1e-4)
+
+def testSmoothingPassesAPlaneUnchangedToItsEdges():
+
+    field = HeightField.fromFunction(plane, (0.0, 3.0, -1.0, 2.0), 0.1, stillWaterLevel = 1.0)
+
+    assert field.smoothed(0.3).z == pytest.approx(field.z, abs = 1e-12)
+
+@pytest.mark.parametrize('sigma', [0.0, -0.1, 2.0])
+def testSmoothingNeedsAPositiveLengthInsideTheGrid(sigma):
+
+    field = HeightField.fromFunction(plane, (0.0, 3.0, -1.0, 2.0), 0.1, stillWaterLevel = 1.0)
+    with pytest.raises(InvalidInputError):
+        field.smoothed(sigma)
+
+@pytest.mark.parametrize('bounds', [(6.13, 9.31, -1.71, 2.2), (0.0, 3.0, -4.0, -2.5), (17.0, 19.0, 3.0, 4.0)])
+def testACropReadsItsParentsBed(bounds):
+
+    field = HeightField.ridge(0.25, gridSpacing = 1.0 / 16.0)
+    crop = field.cropped(bounds)
+    rng = np.random.default_rng(3)
+    x, y = rng.uniform(bounds[0], bounds[1], 400), rng.uniform(bounds[2], bounds[3], 400)
+
+    assert crop.bounds == bounds
+    assert crop.x.size < field.x.size
+    assert crop.elevation(x, y) == pytest.approx(field.elevation(x, y), abs = 1e-13)
+    assert crop.gradient(x, y) == pytest.approx(field.gradient(x, y), abs = 1e-12)
+
+@pytest.mark.parametrize('bounds', [(-1.0, 3.0, -1.0, 1.0), (2.0, 21.0, -1.0, 1.0), (3.0, 3.0, -1.0, 1.0)])
+def testACropMustLieInsideItsParent(bounds):
+
+    with pytest.raises(InvalidInputError):
+        HeightField.ridge(0.25, gridSpacing = 1.0 / 16.0).cropped(bounds)
+
+def testATextGridReadsBackItsField(tmp_path):
+
+    field = HeightField.fromFunction(quadratic, (0.0, 3.0, -1.0, 2.0), 0.13, stillWaterLevel = 1.0)
+    gridX, gridY = np.meshgrid(field.x, field.y)
+    points = np.column_stack([gridX.ravel(), gridY.ravel(), field.z.ravel()])
+    points = points[np.random.default_rng(5).permutation(len(points))]
+    elevations, depths = tmp_path / 'elevations.csv', tmp_path / 'depths.txt'
+    np.savetxt(elevations, points, fmt = '%.17g', delimiter = ',', header = 'x, y, z')
+    np.savetxt(depths, np.column_stack([points[:, :2], 1.0 - points[:, 2]]), fmt = '%.17g')
+
+    for path, isDepth in ((elevations, False), (depths, True)):
+        read = HeightField.fromGridFile(path, stillWaterLevel = 1.0, bounds = field.bounds, depths = isDepth)
+        assert read.x == pytest.approx(field.x, abs = 1e-12)
+        assert read.y == pytest.approx(field.y, abs = 1e-12)
+        assert read.z == pytest.approx(field.z, abs = 1e-12)
+
+@pytest.mark.parametrize('rows', [
+    ['0 0 0', '1 0 0', '2 0 0', '3 0 0'] * 4,
+    [f'{x} {y} 0' for x in range(4) for y in range(4)][:-1],
+    [f'{x} {y} 0' for x in range(4) for y in range(4)][:-1] + ['0 0 0'],
+    [f'{x} {y} 0' for x in range(4) for y in range(4)] + ['1 2'],
+    [f'{x} {y} 0' for x in range(4) for y in range(4)] + ['1 2 deep'],
+    [f'{x} {y} 0' for x in (0, 1, 2, 4) for y in range(4)],
+])
+def testIrregularTextGridsAreRejected(tmp_path, rows):
+
+    path = tmp_path / 'grid.txt'
+    path.write_text('\n'.join(rows) + '\n', encoding = 'utf-8')
+    with pytest.raises(InvalidInputError):
+        HeightField.fromGridFile(path, stillWaterLevel = 1.0)
+
+def secondDegree(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+
+    # Total degree two stays so under a turn; quadratic()'s x^2 y^2 term would not
+    return 0.3 + 0.05 * x - 0.02 * y + 0.01 * x * x - 0.03 * x * y + 0.02 * y * y
+
+@pytest.mark.parametrize('direction', [0.0, 30.0, 90.0, -135.0])
+def testATurnedQuadraticBedIsExact(direction):
+
+    field = HeightField.fromFunction(secondDegree, (-3.0, 3.0, -3.0, 3.0), 0.1, stillWaterLevel = 1.0)
+    pivot = (0.4, -0.3)
+    turned = field.rotated(direction, (-1.5, 1.6, -1.2, 1.4), pivot = pivot)
+    rng = np.random.default_rng(7)
+    x, y = rng.uniform(-1.5, 1.6, 400), rng.uniform(-1.2, 1.4, 400)
+    angle = math.radians(direction)
+    sourceX = pivot[0] + math.cos(angle) * (x - pivot[0]) - math.sin(angle) * (y - pivot[1])
+    sourceY = pivot[1] + math.sin(angle) * (x - pivot[0]) + math.cos(angle) * (y - pivot[1])
+
+    assert turned.bounds == (-1.5, 1.6, -1.2, 1.4)
+    assert turned.elevation(x, y) == pytest.approx(secondDegree(sourceX, sourceY), abs = 1e-12)
+
+def testAWaveTravellingAlongYSeesTheBedAlongX():
+
+    # A bed rising along y; a wave travelling along +y meets it along +x once the bed turns by 90 degrees
+    field = HeightField.fromFunction(lambda x, y: 0.05 * y * y + 0.0 * x, (-4.0, 4.0, -4.0, 4.0), 0.1,
+                                     stillWaterLevel = 1.0)
+    turned = field.rotated(90.0, (-3.0, 3.0, -2.0, 2.0), pivot = (0.0, 0.0))
+    x = np.linspace(-3.0, 3.0, 13)
+
+    for y in (-2.0, 0.0, 1.5):
+        assert turned.elevation(x, np.full_like(x, y)) == pytest.approx(0.05 * x * x, abs = 1e-12)
+
+def testATurnedRegionMustLieInsideTheField():
+
+    field = HeightField.fromFunction(quadratic, (-3.0, 3.0, -3.0, 3.0), 0.1, stillWaterLevel = 1.0)
+    # The square's corners reach 2.5 sqrt(2) from the centre once turned by 45 degrees
+    with pytest.raises(InvalidInputError):
+        field.rotated(45.0, (-2.5, 2.5, -2.5, 2.5))
+
+    assert field.rotated(45.0, (-2.1, 2.1, -2.1, 2.1)).bounds == (-2.1, 2.1, -2.1, 2.1)
+
+def testShoalingStartsWhereTheBedFirstRisesBySomeShare():
+
+    # A plane beach from x = 10 on one side of the tank, flat on the other: the first side decides
+    field = HeightField.fromFunction(lambda x, y: np.where(y > 0.0, np.maximum(x - 10.0, 0.0) / 20.0, 0.0),
+                                     (0.0, 30.0, -1.0, 1.0), 0.05, stillWaterLevel = 1.0)
+
+    assert field.offshoreDepth() == pytest.approx(1.0)
+    # The depth falls below 0.95 just past x = 11
+    assert field.shoalingStart() == pytest.approx(11.05)
+    assert field.shoalingStart(share = 0.2) == pytest.approx(14.05)
+    flat = HeightField.fromFunction(lambda x, y: 0.0 * x, (0.0, 5.0, 0.0, 1.0), 0.1, stillWaterLevel = 1.0)
+    assert flat.shoalingStart() is None
+    with pytest.raises(InvalidInputError):
+        field.shoalingStart(share = 1.0)
