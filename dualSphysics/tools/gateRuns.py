@@ -15,6 +15,9 @@ Runs pySurf's phase 1 gate cases in DualSPHysics and measures them with pySurf's
                 element model's impact within two spacings of that model's
     mostert     H0/h0 = 0.3 on a 3 degree plane beach, Mostert and Deike's (2020) plunging case;
                 set up here, run and measured by mostertRuns.py
+    oregonReef  H0/h0 = 0.4 over Quiroga and Cheung's (2013) fringing reef in the geometry of
+                pySurf's reef-flat validation (temp/phase3/reefFlat/reefFlat2D.py); set up here,
+                run and measured by temp/phase3/reefFlat/dsphReefFlat.py
 
 Each case keeps pySurf's coordinates and bed (`dsphCase.SolitaryCase`), extended flat offshore to a
 piston that generates the solitary wave. Three stages:
@@ -38,6 +41,8 @@ not saved is recovered from the run's Part file times); --slip sets mDBC's slip 
 fails in 2D with GenCase's normals from the particles: without mDBC's no-penetration option the water
 leaves the domain within 1.5 s; with it (set for slip modes 2 and 3) the still water level falls 0.09
 h0 in 4 s.
+The GPU solver runs by default; a script that imports this module sets `solverMode = 'cpu:<threads>'`
+to run DualSPHysics's CPU solver on that many OpenMP threads (runCase.sh's third argument).
 Runs land in ~/dsphRuns/<case><ppd> in WSL; results in pySurf/temp/phase1_5/<case><ppd>.json. These
 are cross-checks: none validates pySurf.
 
@@ -68,7 +73,7 @@ sys.path.insert(0, str(tools))
 # Local imports
 from dsphCase import SolitaryCase
 from dsphOutput import partTimes, readPartArrays
-from pysurf import constants
+from pysurf import constants, waveTheory
 from pysurf.bathymetry import Bathymetry
 from pysurf.BreakingWave import BreakingWave
 from pysurf.waveBreaking import BreakingTracker, particleSurface
@@ -87,6 +92,8 @@ dns = {'impactX': 42.05, 'impactHeightOverDepth': 0.64, 'overturnAreaOverImpactH
 windowOverride = None
 # mDBC's slip mode given on the command line (--slip), in place of the default 1
 slipOverride = None
+# The solver runCase.sh runs: 'gpu', or 'cpu:<threads>' for the CPU solver on that many OpenMP threads
+solverMode = 'gpu'
 
 def setup(case: str, ppd: int) -> dict:
 
@@ -121,7 +128,19 @@ def setup(case: str, ppd: int) -> dict:
                             particlesPerDepth = ppd, scheme = 'deltaSph')
         # Guyenne and Grilli's 3D runs break at 7.66 to 8.64 sqrt(h0/g), 2.45 to 2.76 s
         return {'wave': wave, 'bed': bed, 'window': (1.8, 4.5), 'stop': 'breaking'}
-    raise ValueError(f"Case '{case}' is not 'grilli', 'surfRanch', 'mostert' or 'ridge'.")
+    if case == 'oregonReef':
+        # Quiroga and Cheung's (2013) fringing reef at H0/h0 = 0.4, run and measured by
+        # temp/phase3/reefFlat/dsphReefFlat.py: pySurf's reefFlat2D.py geometry, the rigid wall
+        # 28.9 m past the reef edge closing the flat
+        ratio, slope, reefDepth = 0.4, 1.0 / 12.0, 0.30 / 2.66
+        toeX = waveTheory.solitaryWaveHalfLength(ratio, 1.0, 0.01) + 7.0
+        edgeX = toeX + (1.0 - reefDepth) / slope
+        bed = Bathymetry.reefBreak(depth = 1.0, toeX = toeX, faceSlope = slope, reefDepth = reefDepth,
+                                   reefLength = (83.7 - 54.8) / 2.66)
+        wave = BreakingWave(depth = 1.0, waveHeight = ratio, beachSlope = slope, bathymetry = bed, particlesPerDepth = ppd,
+                            scheme = 'deltaSph', startingWave = 'exact')
+        return {'wave': wave, 'bed': bed, 'window': (3.8, 11.0), 'stop': 'end', 'edgeX': edgeX}
+    raise ValueError(f"Case '{case}' is not 'grilli', 'surfRanch', 'mostert', 'ridge' or 'oregonReef'.")
 
 def solitaryCase(case: str, ppd: int, paddleHeight: float, endTime: float, window: tuple | None, coarseStep: float) -> SolitaryCase:
 
@@ -138,11 +157,11 @@ def solitaryCase(case: str, ppd: int, paddleHeight: float, endTime: float, windo
 
 def runCase(runName: str, case: SolitaryCase) -> float:
 
-    '''Write the case, run GenCase and the GPU solver in WSL, return the wall time [s].'''
+    '''Write the case, run GenCase and the solver (`solverMode`) in WSL, return the wall time [s].'''
 
     case.write(f'{windowsRuns}/{runName}')
     started = time.perf_counter()
-    done = subprocess.run(['wsl.exe', '--exec', 'bash', runScript, f'{wslRuns}/{runName}', case.name],
+    done = subprocess.run(['wsl.exe', '--exec', 'bash', runScript, f'{wslRuns}/{runName}', case.name, solverMode],
                           capture_output = True, text = True)
     if done.returncode != 0:
         raise RuntimeError(f'{runName} failed:\n{done.stdout[-2000:]}\n{done.stderr[-2000:]}')
