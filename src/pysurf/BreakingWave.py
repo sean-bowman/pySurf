@@ -35,8 +35,8 @@ every time by sqrt(d / g), is the same at any depth.
 ----------------------------------------------------------------------
 
 The 'deltaSph' scheme, with its limited artificial viscosity, measured on the GPU backend against
-the phase 1 criteria of planning/gpuSphRoadmap.md, set before the runs except the still tank's; the
-runs are scripted there, not yet in the test suite. The slope cases start from bed-fitted columns
+criteria set before the runs, except the still tank's. The runs take GPU hours, so they are not in
+the test suite; validation/gpuSph holds them. The slope cases start from bed-fitted columns
 (`bedFitted`), the default:
 
 Validated at 64 and 128 particles per depth: the breaking point. Against Grilli et al. (1997) for
@@ -71,6 +71,31 @@ the boundary element model's jet (`SplashUp`'s hand-off, plain term) the scheme 
 0.18, where the hand-off with the Shepard scheme loses 0.30 at 48: the shortfall is the dissipation
 after the jet lands, not the jet.
 
+Not validated: the bore after breaking. Quiroga and Cheung (2013) ran solitary waves over a fringing
+reef in Oregon State University's Large Wave Flume: h0 = 2.66 m, a 1:12 face rising to a flat
+0.30 m deep, and a rigid wall 28.9 m past the reef edge. For H0/h0 = 0.4 the smooth-bed record at
+WG12, 10.6 m past the edge, peaks at 0.608 H0 (digitized from Quiroga 2012, figure 25). At 128
+particles per depth the bore's largest column height there stands 24.5 to 29.3 percent above it,
+against a criterion of 10 percent. That spread comes from three runs whose changes leave the physics
+alone: the time step 10 percent shorter, and the crest started half a spacing shoreward (0.757,
+0.786, 0.767). The same three at 64 particles per depth read 0.605 to 0.732, so the failure and its
+growth with resolution both stand clear of the spread. At WG13 and WG14 the three 128 runs straddle
+the criterion (+0.6 to +28.6 and -53 to +22.5 percent). The free-slip bed and the missing air raise
+the bore too, and a Manning estimate puts the bed's part near 10 percent. The thesis's gauge table
+and figure 3 put the reef edge 54.4 to 54.9 m from the wavemaker; the case takes 54.8 m, and that
+bound moves WG12 by 0.011 H0 at most. With the energy lost in active breaking, this leaves
+everything after the break a limit of the scheme. Bore heights, runup and the splash are unvalidated
+and probably high, and the shortfall grows as the spacing shrinks.
+
+DualSPHysics's settings do not close the gap: c0 = 20 sqrt(g d), negative pressure allowed, no
+viscosity limiter, the artificial viscosity applied against the bed at rest, and h = 1.5 spacings
+(`solverOptions`, `soundSpeedFactor`, `smoothingLengthRatio`). Over the reef flat they reproduce
+that code's loose particles and slower bore front, though not its lower bore. On Mostert and Deike's
+beach they lose 0.545 and 0.607 of the energy in active breaking at 64 and 32 particles per depth,
+76 and 96 percent over 0.31, and drain about 1 percent of the wave's energy per depth travelled
+before it breaks. The defaults stand; settings between the two sets chosen to reach 0.31 would be
+calibration.
+
 The next two paragraphs were measured from the square lattice's start.
 
 The artificial viscosity. Monaghan's term acts on the crest's smooth strain as a viscosity of about
@@ -104,7 +129,7 @@ halving of a uniform spacing raises.
 
 A tank of still water, after 20 sqrt(d / g), keeps an rms speed of 7.1×10^-4 sqrt(g d) and a fastest
 of 3.2×10^-3 at 60 particles per depth, inside a criterion of 10^-3 on the rms and 10^-2 on the
-fastest; at 30 the rms reaches 1.4×10^-3. That criterion replaced one of 10^-3 on the fastest
+fastest; at 30 the rms reaches 1.1×10^-3. That criterion replaced one of 10^-3 on the fastest
 particle after the runs, which every setting failed.
 
 Not validated: a jittered start (`startJitter`, 0 by default). Moved off bed-fitted columns by up to
@@ -155,6 +180,10 @@ Feddersen, F., Hanson, K., Mostert, W. & Fincham, A. (2024) -- Modelling wind-in
     overturning wave shape, J. Fluid Mech. 1000, A48.
 Mostert, W. & Deike, L. (2020) -- Inertial energy dissipation in shallow-water breaking waves,
     J. Fluid Mech. 890, A12.
+Quiroga, P.D. & Cheung, K.F. (2013) -- Laboratory study of solitary-wave transformation over
+    bed-form roughness on fringing reefs, Coastal Engineering 80, 35-48.
+Quiroga, P.D. (2012) -- Effects of bed-form roughness on long-wave transformation over fringing
+    reefs, MS thesis, University of Hawaii at Manoa.
 
 Sean Bowman [10/11/2026]
 

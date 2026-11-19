@@ -32,11 +32,11 @@ DualSPHysics v5.4 is built from source in WSL2 with CUDA, on Windows 11 with an 
 | --- | --- |
 | `tools/buildDualSphysics.sh` | Builds the GPU and CPU solvers in WSL from a local clone |
 | `tools/runDamBreak.sh`, `tools/checkDamBreak.py` | Runs the dam break DualSPHysics ships and checks the build against the CPU solver and the experiment |
-| `tools/runCase.sh` | Runs one case in WSL: GenCase, then the GPU solver |
+| `tools/runCase.sh` | Runs one case in WSL: GenCase, then the GPU solver, or the CPU solver on a given number of OpenMP threads |
 | `tools/dsphCase.py` | Writes a 2D solitary-wave case from a pySurf `Bathymetry`: bed band, piston, end wall, water, gauge, output windows |
 | `tools/dsphRidge.py`, `tools/dsphReef.py` | Write the 3D ridge and reef tanks: bed geometry as STL bands and a VTK surface for the normals |
 | `tools/dsphOutput.py` | Reads the solver's binary Part files directly, or PartVTK's CSV frames |
-| `tools/gateRuns.py` | Tunes, runs and measures the 2D Grilli and Surf Ranch cases |
+| `tools/gateRuns.py` | Tunes, runs and measures the 2D Grilli and Surf Ranch cases; sets up the Oregon State reef flat |
 | `tools/mostertRuns.py` | Runs Mostert and Deike's energy-loss case: a wave run and a still-water run, energies from the particles |
 | `tools/ridgeRuns.py`, `tools/reefRuns.py` | Tune, run and measure the 3D ridge and reef |
 
@@ -92,7 +92,7 @@ python gateRuns.py grilli 32
 
 `gateRuns.py` holds the WSL distribution and user (`wslDistribution`, `wslUser`); the other tools take their run folders from it. Windows reads the runs through `\\wsl.localhost\Ubuntu-24.04\home\<user>\dsphRuns`. The measuring runs on the CPU in Windows while the card runs the solver in WSL; cap pySurf's Numba threads (`NUMBA_NUM_THREADS`) when several runs share the machine.
 
-A 3D case at 32 ppd runs for four to eight hours. Start long runs from a process that outlives the terminal, and log to a file.
+Setting `gateRuns.solverMode = 'cpu:<threads>'` from a script that imports the module runs the CPU solver instead, on that many OpenMP threads, which leaves the card to pySurf. A 3D case at 32 ppd runs for four to eight hours. Start long runs from a process that outlives the terminal, and log to a file.
 
 ## Build check: the dam break
 
@@ -120,6 +120,7 @@ python mostertRuns.py <ppd> <artificial|sps> [paddle height to start from] [--me
 | `grilli` | H0/h0 = 0.3 on a 1:35 plane beach | Grilli et al. (1997): Hb/h0 within 10 percent of 0.476, hb/h0 within 15 percent of 0.345 |
 | `surfRanch` | H0/h0 = 0.6 over the Surf Ranch reef | Feddersen et al. (2024): impact x within 0.5 h0, H within 5 percent, A_O/H² within 15, A_J/H² within 20, theta_O within 5 degrees; the surface 0.1 sqrt(h0/g) before the boundary element model's impact within two spacings of that model's |
 | Mostert | H0/h0 = 0.3 on a 3 degree plane beach | Mostert and Deike (2020): the share of the wave's energy lost in active breaking within 30 percent of 0.31 |
+| `oregonReef` | H0/h0 = 0.4 over Quiroga and Cheung's (2013) fringing reef: a 1:12 face to a flat 0.113 h0 deep, closed by a rigid wall 28.9 m past the reef edge | The flume's smooth-bed records at WG12, WG13 and WG14 (Quiroga 2012); the tank is pySurf's reef-flat validation's, so the run is a cross-check of that validation |
 
 `dsphCase.py` writes each tank from pySurf's own `Bathymetry`, extended flat offshore to the piston, so both codes see the same bed. The particle lattice sits half a spacing off the bed line, as pySurf's does.
 
@@ -185,6 +186,7 @@ All at the scheme above; breaking points read with the rule above.
 | Mostert, laminar plus SPS | The same | Not measurable: the still tank's thin water over the beach throws particles from 1.8 s |
 | Ridge k = 0.25, 32 ppd | Breaking point; velocity | t +0.6 percent, x +0.001 h0, crest -3.5 percent; speed -8.5 percent, spanwise ratio +27: passes |
 | Ridge k = 0.50, 32 ppd | Breaking point | t +2.6 percent, x +0.134 h0, crest -5.3 percent: fails on crest height |
+| Oregon State reef flat, 64 ppd, CPU solver on 6 threads | Reported only | Column eta_max/H0 0.840, 0.605 and 0.400 at WG12, WG13 and WG14, against the flume's 0.608, 0.558 and 0.530 (+38, +9 and -25 percent); its wave reaches the reef edge 12 to 15 percent under pySurf's, its volume within 10 h0 of the crest 5 to 8 percent short of the exact wave's. 18,135 s |
 | Reef, 32 ppd | Reported only | The seven inner sections plunge 0.8 to 1.4 h0 past the shelf's edge (A_O/H² 0.12 to 0.17, theta_O 34 to 47 degrees); the break crosses the span at 9.9 m/s, 11 percent faster than c / tan 25° |
 
 From 32 to 128 ppd the 2D overturn's shape converges and its height and timing stall: the paddle's narrow wave at H0/h0 = 0.6 likely sets the remaining error. The 2D runs use slip mode 1 and the 3D runs slip mode 3, so the two sets differ in their walls as well as their dimension.

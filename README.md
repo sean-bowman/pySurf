@@ -32,19 +32,19 @@ Breaking surf waves in 2D over a bed of any shape: a wave shoaling up a beach un
 
 - `OverturningWave` solves fully nonlinear potential flow with boundary elements. Its free surface can fold, so it gives the shape of the barrel: the lip curling over and the tube under it, up to the moment the jet lands. `SplashUp` hands that flow to particles and carries it on through the impact and the splash-up; `ReefOverturn` feeds it waves from an SGN train breaking on a reef.
 - `SurfaceBreakingWave` and `ReefBreak` solve the Serre-Green-Naghdi equations for the free surface. The surface cannot fold, so a breaking wave becomes a bore, but where and how high waves break comes out in about a minute, for a single wave on a beach or a train of swell over a reef.
-- `BreakingWave` simulates every parcel of water as a particle with weakly compressible SPH. At the resolution a desktop affords it breaks too late; it is kept as the particle reference.
+- `BreakingWave` simulates every parcel of water as a particle with weakly compressible SPH on a GPU. Its δ-SPH scheme reaches Grilli's breaking point from 64 particles per depth and the DNS's overturn at 128, and carries the water on through the jet's landing, where it dissipates too little. `BreakingWave3D` runs the same scheme over a 3D bed met from any direction.
 
 Grilli et al.'s (1997) slope parameter $S_0 = 1.521 \tan\beta / \sqrt{H/d}$ predicts the breaker type before anything runs. The runs are Froude-similar, so every result scales with the depth $d$ and every time with $\sqrt{d/g}$. The GIFs show the whole bed above, its vertical scale stretched, and a true-scale close-up below; the red marker is the measured breaking point.
 
 | | Potential flow (BEM) | Free surface (SGN) | Particles (SPH) |
 | --- | --- | --- | --- |
-| Unknowns, 1:35 case | 440 to 570 surface and 224 bed nodes | Depth and depth-averaged velocity on 3,869 cells | 7,748 particles |
-| Run time, 1:35 case | 8 min | 70 s | 37 min |
-| Breaking point vs Grilli (1997) | $H_b/d$ +5.8%, $h_b/d$ +4.1% | $H_b/d$ -4.5%, $h_b/d$ +2.0% | $H_b/d$ -32%, $h_b/d$ -72% |
-| Overturn shape at impact vs DNS and field | $A_O/H_I^2$ -0.9%, $\theta_O$ -3.0°; $W/L$ +1.3% vs field | None: the front becomes a bore | Not measured |
-| Overturning lip | Yes, until the jet lands | No: the front becomes a bore | Yes, a few particles thick |
-| After breaking | Ends at touchdown; `SplashUp` carries it on with SPH | Bore and runup | Splash and runup, coarse |
-| Breaking criterion | Front face vertical (Grilli's definition) | Front steeper than 30 degrees (Tissier et al. 2012) | Front face leaning past vertical |
+| Unknowns, 1:35 case | 440 to 570 surface and 224 bed nodes | Depth and depth-averaged velocity on 3,869 cells | 128,947 particles, 64 per depth |
+| Run time, 1:35 case | 8 min | 70 s | 11 min on a GPU |
+| Breaking point vs Grilli (1997) | $H_b/d$ +5.8%, $h_b/d$ +4.1% | $H_b/d$ -4.5%, $h_b/d$ +2.0% | $H_b/d$ +4.3%, $h_b/d$ -8.4% |
+| Overturn shape at impact vs DNS and field | $A_O/H_I^2$ -0.9%, $\theta_O$ -3.0°; $W/L$ +1.3% vs field | None: the front becomes a bore | $A_O/H_I^2$ -3%, $\theta_O$ -3.6° vs DNS, at 128 particles per depth |
+| Overturning lip | Yes, until the jet lands | No: the front becomes a bore | Yes, through the jet's landing |
+| After breaking | Ends at touchdown; `SplashUp` carries it on with SPH | Bore and runup | Splash, bore and runup; dissipates too little |
+| Breaking criterion | Front face vertical (Grilli's definition) | Front steeper than 30 degrees (Tissier et al. 2012) | Front face vertical: the start of its last vertical run before the jet lands |
 
 #### Free-surface model (Serre-Green-Naghdi)
 
@@ -289,35 +289,112 @@ The incident wave matches the flume; nothing after it does. The SGN train reflec
 
 #### Particle model (SPH)
 
-![Solitary wave breaking on a 1:15 beach](examples/breakingWave/breakingWave.gif)
+![Solitary wave breaking on a 1:35 beach, delta-SPH at 64 particles per depth](examples/breakingWave/breakingWave.gif)
 
 ```python
 from pysurf.BreakingWave import BreakingWave
 
-wave = BreakingWave(depth = 1.0, waveHeight = 0.3, beachSlope = 1 / 15, particlesPerDepth = 24)
+wave = BreakingWave(depth = 1.0, waveHeight = 0.3, beachSlope = 1 / 35, particlesPerDepth = 64,
+                    scheme = 'deltaSph', backend = 'gpu')
 wave.run()
-wave.summary()                               # breaking point, breaker type, runup
-wave.writeAnimation('breakingWave.gif')
+wave.summary()                               # breaking point, breaker type, the jet's landing
+wave.writeAnimation('breakingWave.gif', dpi = 72)
 ```
 
-`BreakingWave` is a facade like `Surfboard`: it lays out the beach (`bathymetry`), places the solitary wave already moving with its first-order velocity field (`waveMakers`), builds the sand and a seaward wall from boundary particles (`sphBoundaries`), steps the solver (`sphSolver`), and tracks the crest, the breaking point and the runup (`waveBreaking`). The breaking point is where the front face of the wave first leans forward of vertical, measured on the water binned into cells one spacing square. Particles are colored by speed. The GIF was written by `writeAnimation(..., frameStep = 2, dpi = 72)` from a 24 particles per depth run (12,121 fluid particles, 40 minutes).
+`BreakingWave` is a facade like `Surfboard`: it lays out the bed (`bathymetry`), places the exact solitary wave already moving (`waveMakers`), builds the bed and a seaward wall from boundary particles (`sphBoundaries`), steps the solver (`sphSolver`, on the GPU through `sphGpu`), and tracks the crest, the breaking point and the jet's landing (`waveBreaking`). The 'deltaSph' scheme is the one validated below:
+
+- the Wendland C2 kernel, with a smoothing length of three particle spacings;
+- density diffusion (δ-SPH, Molteni and Colagrossi 2009) acting on the density less its hydrostatic part, so still water stays at rest;
+- the kernel gradient correction of Bonet and Lok (1999) in the continuity equation;
+- wall pressure carried from the water to the boundary particles (Adami et al. 2012);
+- Monaghan's artificial viscosity at α = 0.01, limited so it damps the particles' noise and leaves the smooth strain under the crest alone;
+- fluid density held at 0.9 ρ₀ or above.
+
+The water starts in columns half a spacing clear of the bed (`bedFitted`). On a square lattice the lowest particles over a slope sit up to a spacing and a half above the bed; they fall into its steps, and still water laid that way never settles. The breaking point is where the front face turns vertical: the start of its last vertical run before the jet lands, read on the smoothed surface. Particles are colored by speed. The GIF is Grilli's case at 64 particles per depth, 128,947 particles, run to 17.3 s in 21 minutes on an RTX 2070 Super. It breaks at $H_b/d = 0.496$ and $h_b/d = 0.316$, the values in the table below. Its frames lie 0.1 s of flow apart from 8 to 12.5 s, where the wave breaks and the jet lands, and 0.2 s apart elsewhere.
 
 | Quantity | Reference | Reference value | Model value | Error | Verdict |
 | --- | --- | --- | --- | --- | --- |
-| First-mode sloshing period, 0.3 m tank, 0.1 m deep, 5 mm spacing | Linear potential flow, $\omega_1^2 = g k_1 \tanh(k_1 d)$ | 0.7017 s | 0.6862 s | -2.2% | Pass (3%) |
-| Solitary wave celerity, $H/d = 0.3$, 12 particles per depth | $\sqrt{g(d+H)}$ (Rayleigh, Boussinesq) | 3.571 m/s | 3.554 m/s | -0.5% | Pass (3%) |
-| Solitary wave celerity, 16 particles per depth | $\sqrt{g(d+H)}$ | 3.571 m/s | 3.560 m/s | -0.3% | Pass (3%) |
-| Breaking height $H_b/d$, $H/d = 0.3$, slope 1:35, 16 particles per depth | Grilli et al. (1997) | 0.476 | 0.325 | -32% | Fail (10%) |
-| Breaking depth $h_b/d$ | Grilli et al. (1997) | 0.345 | 0.097 | -72% | Fail (15%) |
-| Breaking index $H_b/h_b$ | Grilli et al. (1997) | 1.380 | 3.34 | +142% | Fail |
+| Breaking height $H_b/d$, $H/d = 0.3$, slope 1:35, 64 particles per depth | Grilli et al. (1997) | 0.476 | 0.496 | +4.3% | Pass (10%) |
+| Breaking depth $h_b/d$, the same | Grilli et al. (1997) | 0.345 | 0.316 | -8.4% | Pass (15%) |
+| $H_b/d$ and $h_b/d$ at 128 particles per depth | Grilli et al. (1997) | 0.476, 0.345 | 0.484, 0.335 | +1.6%, -2.8% | Pass |
+| $H_b/d$ and $h_b/d$ at 32 particles per depth | Grilli et al. (1997) | 0.476, 0.345 | 0.486, 0.278 | +2.1%, -19.5% | Fail ($h_b$) |
+| Overturn at the jet's landing, Surf Ranch soliton ($H/d = 0.6$), 128 particles per depth | Feddersen et al. (2024), DNS | | Lands 0.04 $d$ short; $H_I$ -0.9%, $A_O/H_I^2$ -3%, $A_J/H_I^2$ -11.5%, $\theta_O$ -3.6° | | Pass, all five |
+| The same at 64 particles per depth | Feddersen et al. (2024), DNS | | Four pass; $\theta_O$ -5.2° | | Fail (5°) |
+| Surface 0.1 $\sqrt{d/g}$ before the jet lands, 32, 64 and 128 particles per depth | The validated potential flow (`OverturningWave`) | | Up to 11, 15 and 14 spacings apart | | Fail (2 spacings) |
+| Share of energy lost in active breaking, $H_0/h_0 = 0.3$ on 3°, 32 and 64 particles per depth | Mostert and Deike (2020), DNS | 0.31 | 0.20, 0.17 | -35%, -47% | Fail (30%) |
+| Bore height over a reef flat at WG12, 10.6 m past the edge, $H_0/h_0 = 0.4$, 128 particles per depth, three runs | Quiroga and Cheung (2013), flume | 0.608 | 0.757 to 0.786 | +24.5% to +29.3% | Fail (10%) |
+| Exact solitary wave over 29 depths of flat bed, 32 and 64 particles per depth | Closed form | | Height under 0.8% low | | Pass (2%) |
+| Still water after 20 $\sqrt{d/g}$, 60 particles per depth | At rest | rms speed $10^{-3}\sqrt{gd}$ | $7.1 \times 10^{-4}\sqrt{gd}$ | | Pass |
 
-The sloshing tank and the solitary wave pass: the solver reproduces the dispersion of standing and progressive gravity waves to within 2.2% and 0.5%. The breaking point does not. At 16 particles per depth the wave breaks far up the beach, in water a third as deep as in Grilli's computation and at two thirds of its breaking height. With the artificial viscosity also acting at the bed, it broke lower still ($H_b/d = 0.262$, $h_b/d = 0.119$).
+The breaking point converges with resolution: the breaking depth converges at first order, and Richardson extrapolation of the three resolutions gives $h_b/d = 0.355$, 3.0% from Grilli's. At 32 particles per depth the wave breaks too far up the slope. The overturn passes all five of the DNS criteria at 128 particles per depth, but its area does not converge monotonically (0.495, 0.308 and 0.341 $H_I^2$ at 32, 64 and 128, against 0.352), so the pass holds at 128 and is not a converged result.
 
-The cause is numerical damping. Over 3 s of travel on a flat bottom (about 11 depths), the crest loses 20%, 12% and 6.5% of its height at 8, 12 and 16 particles per depth. On the 1:35 slope the wave crosses about 30 depths before it breaks, and the loss there outweighs the shoaling that should raise it 30% (Green's law, $H \propto h^{-1/4}$). Particle size makes it worse, since it is fixed while the water shallows: at Grilli's breaking depth only 5.5 particles span the water column. Closing the gap takes either several times the resolution, which in 2D costs the cube of the factor in run time, or a density-diffusion scheme such as $\delta$-SPH (Molteni and Colagrossi 2009) in place of the Shepard filter.
+![A solitary wave over the Oregon State fringing reef at 64 and 128 particles per depth, with three gauges' records against the flume's largest elevation](examples/breakingWave/reefFlat.png)
 
-The GIF is the steeper 1:15 beach at 24 particles per depth. The wave crosses 15 depths of slope instead of 30, and when it breaks its crest stands about ten particles above the bed, against seven in the 1:35 run, enough to see the face turn vertical and the jet thrown ahead of it. It still breaks late, in water $0.11d$ deep with $H_b/d = 0.33$, and has no published reference here; it is a qualitative picture of the breaking process.
+After the wave breaks, the model dissipates too little, and the shortfall grows as the spacing shrinks. The model has no turbulence. Its artificial viscosity and density diffusion stand in for the loss, and both scale with the spacing. On Mostert and Deike's beach it loses 35% too little of its energy in active breaking at 32 particles per depth and 47% too little at 64. The figure above is the fringing reef Quiroga and Cheung (2013) ran in Oregon State University's Large Wave Flume: 2.66 m deep, a 1:12 face, and a flat 0.30 m deep closed by a wall. At 128 particles per depth the bore 10.6 m past the reef edge stands 24.5 to 29.3% above the flume's. That holds in three runs whose changes leave the physics alone (the time step 10% shorter, the crest started half a spacing further on), clear of their spread, and every 128 run stands above every 64 run. Two of the model's simplifications raise the bore as well, the free-slip bed and the missing air, but a Manning estimate puts the bed's part near 10%. At the next two gauges the three runs straddle the 10% band, so those gauges cannot separate the model from the flume. Bore heights, runup and the splash are therefore unvalidated, and probably high.
 
-Post-breaking flow (the bore and the runup tongue) has no reference here at all; at a few particles across the jet it shows where the water goes, not how fast.
+DualSPHysics's settings do not close the gap. Carried into pySurf (c0 = 20 $\sqrt{gd}$, negative pressure allowed, no viscosity limiter, the viscosity applied against the bed at rest, h = 1.5 spacings), they reproduce DualSPHysics's loose particles and slower front over the reef flat, though not its lower bore. On Mostert and Deike's beach they lose 0.545 and 0.607 of the energy in active breaking at 64 and 32 particles per depth, 76% and 96% too much, and drain about 1% of the wave's energy per depth it travels before it breaks. Settings chosen between the two sets to land on Mostert and Deike's share would be calibration, not validation.
+
+The animations in `examples/breakingWave/`:
+
+- [reefFlat.mp4](examples/breakingWave/reefFlat.mp4): the figure above in motion, the 64 and 128 runs over the flat with the gauge records.
+- [reefFlatScatter128.mp4](examples/breakingWave/reefFlatScatter128.mp4): the three 128 runs stacked.
+- [reefFlatDualSphysics.mp4](examples/breakingWave/reefFlatDualSphysics.mp4): DualSPHysics's run of the same reef beside pySurf's, a cross-check.
+- [surfRanchReefResolution.mp4](examples/breakingWave/surfRanchReefResolution.mp4): the Surf Ranch reef run past the jet's landing at 16, 32 and 64 particles per depth. 32 and 64 agree after breaking. At all three the bore loses energy within 30% of the rate the hydraulic jump relation gives for its height, a check against theory, not validation.
+
+The default scheme, 'shepard', is the original: a cubic spline kernel at 1.3 spacings and a Shepard density filter. It holds the solitary wave's speed (within 0.5% at 12 particles per depth) and the first sloshing period (2.2%). It fails Grilli's breaking point at 16 particles per depth ($H_b/d$ -32%, $h_b/d$ -72%): numerical damping drains the wave faster than shoaling builds it.
+
+#### Breaking over a 3D bed (GPU SPH)
+
+![A solitary wave breaking over the Surf Ranch reef turned 25 degrees, 3D SPH at 32 particles per depth with the crest's water split once, drawn as sections every half depth](examples/breakingWave3D/shoalReef.gif)
+
+```python
+import numpy as np
+
+from pysurf.bathymetry import HeightField
+from pysurf.BreakingWave3D import BreakingWave3D, offshoreReach
+
+def reefBed(x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    '''The Surf Ranch reef with straight contours: a 0.0693 face from x = 0 to a shelf 0.371 deep.'''
+    return np.clip(0.0693 * x, 0.0, 1.0 - 0.371) + 0.0 * y
+
+reef = HeightField.fromFunction(reefBed, (-30.0, 40.0, -30.0, 30.0), 1.0 / 32.0, stillWaterLevel = 1.0)
+region = (-25.0, 21.0, -4.0, 4.0)                                # the tank, in the wave's frame
+turned = reef.rotated(30.0, region, pivot = (0.0, 0.0))         # the wave meets the contours at 30 degrees
+wallX, crestX = offshoreReach(turned, 0.6, depth = 1.0)
+region = (wallX, 21.0, -4.0, 4.0)
+zoneFrom = turned.cropped(region).shoalingStart(depth = 1.0, share = 0.45)
+wave = BreakingWave3D(reef, 0.6, crestX, depth = 1.0, particlesPerDepth = 32, sections = (-2.0, 0.0, 2.0),
+                      direction = 30.0, region = region, pivot = (0.0, 0.0),
+                      refinement = {'levels': 1, 'behind': 1.0, 'ahead': 1.5, 'above': -0.4,
+                                    'fromX': zoneFrom, 'mergeBehind': 1.5})
+wave.run()
+wave.summary()                               # each section's breaking point and the jet's landing
+```
+
+`BreakingWave3D` runs `BreakingWave`'s δ-SPH scheme in a rectangular tank over a height field (`bathymetry.HeightField`). The bed comes from a numpy grid, a function or an x, y, z text file, smoothed to the particle scale. For a wave arriving at an angle, the bed is turned so the wave travels along +x (`direction`), and the free-slip side walls then run along the wave. `offshoreReach` starts the exact solitary wave a half length offshore of where the bed starts to shoal, so it crosses as little water as it can before it breaks. Vertical sections across the tank, each two particle rows wide, carry the 2D breaking tracker. An 8 GB card holds a uniform lattice of 32 particles per depth on these tanks. Finer water near the crest comes from a zone that follows it (`refinement`, `sphRefinement`): the zone splits the water once from 1 depth behind the crest to 1.5 ahead, from 0.4 depth under still water up, and merges the daughters again 1.5 depths behind it.
+
+The GIF is the Surf Ranch reef turned 25 degrees between walls 4 depths apart, at 32 particles per depth with the crest zone: 6.6 million particles by the end, 32 GPU hours. The seven inner sections break one after another along the reef.
+
+| Quantity | Reference | Result | Verdict |
+| --- | --- | --- | --- |
+| Breaking point on the sloping ridge, k = 0.10 to 0.50, 32 particles per depth | Guyenne and Grilli (2006), 3D potential flow | Four of five pass: time +1.2% to +4.7%, crest position +0.07 to +0.41 $d$, crest height -4.5% to -0.5%. At k = 0.25 the crest stands 0.53 $d$ past theirs | Fail at k = 0.25 (0.5 $d$) |
+| Breaking point at k = 0.25, with the crest zone | Guyenne and Grilli (2006) | Time +2.9%, crest position +0.39 $d$, crest height -0.2% | Pass (5%, 0.5 $d$, 5%) |
+| Largest horizontal speed under the crest, and spanwise over streamwise, k = 0.25 | Guyenne and Grilli (2006) | -0.3% and +0.1%; with the zone -0.6% and +1.0% | Pass (10%, 30%) |
+| Crest crossing a uniform oblique reef at 30°, 16 particles per depth, tank 16 $d$ across | Closed form, $c_0 / \tan 30°$ | Within 1.7% at every distance from 2 $d$ before the toe to 11 past it | Pass |
+| The Surf Ranch reef extruded across a tank 1 $d$ wide, 32 particles per depth | The 2D model | Breaking within 0.25% in time and 1.3% in height; with the zone, all eight overturn readings within half the gates' tolerances | Consistent |
+| The Surf Ranch reef turned 25°, seven sections, 32 particles per depth | DualSPHysics, a cross-check | Breaks within 0.04 s of DualSPHysics and 8% to 11% higher; the jet lands 0.03 to 0.13 s later | Reported |
+
+The model's claim is the breaking point, at 32 particles per depth with the crest zone. The bed, its rotation and the tank carry the wave there: the extruded reef matches 2D, the crest crosses the oblique reef at the closed form's speed, and on the turned reef the wave breaks with DualSPHysics's. Without the zone the 2D scheme's lag at 32 particles per depth carries into 3D: the ridge's centre line, run in 2D, breaks 0.37 $\sqrt{d/g}$ after Guyenne and Grilli's 2D result, against 0.10 at 64. Less that lag, the breaking point's shift from 2D to 3D matches theirs within 0.02 $\sqrt{d/g}$ at k = 0.25 and 0.34.
+
+Not validated: the overturn's shape in 3D, and everything after breaking. In 2D the crest zone fails the Surf Ranch overturn from both a 32 and a 64 particles per depth base, and no measurement of a 3D overturn's lip exists. After breaking, the 2D model's shortfall in dissipation applies (above), so bores and splashes are probably too high. On the oblique reef the break crosses the span 9% to 11% slower than $c_0 / \tan 30°$ in the 16 $d$ tank and 15% to 21% slower in an 8 $d$ one. The free-slip walls mirror the bed into a chevron reef, and the breaking point creeps shoreward between them, a limit of a walled tank; the closed form covers the crest only. On the turned reef pySurf's jet lands after DualSPHysics's, where in 2D it landed 0.55 s before, and the runs do not say which code departs from 2D in that tank.
+
+![A solitary wave crossing a uniform oblique reef at 30 degrees, 16 particles per depth, 15 sections every depth between free-slip walls 16 depths apart](examples/breakingWave3D/obliqueReef.png)
+
+The animations in `examples/breakingWave3D/`:
+
+- [shoalReef32.mp4](examples/breakingWave3D/shoalReef32.mp4): the GIF above at full resolution.
+- [shoalReef16vs32.mp4](examples/breakingWave3D/shoalReef16vs32.mp4): the same reef at 16 and 32 particles per depth, stacked. At 16 the shelf is six particles deep, and the breaker curls without a clean jet.
+- [obliqueReef16.mp4](examples/breakingWave3D/obliqueReef16.mp4): the oblique reef above, at 16 particles per depth.
 
 ### [WaterSim →](src/pysurf/WaterSim/README.md)
 
@@ -337,16 +414,18 @@ python -m pysurf.WaterSim   # Run default sloshing tank
 | `bemSolver` | Fully nonlinear potential flow by boundary elements: the Lagrangian free surface, regridding and smoothing, jet and overturn measures, and the flow inside the water (velocity, and pressure from $\phi_t$) |
 | `sphHandoff` | The potential flow handed to SPH particles in a window: seeding, density from the pressure, boundary pressure, piston |
 | `sliceStack` | A 3D potential flow from 2D boundary element slices across a bed that varies along the crest (strip theory), run in parallel; the spanwise velocity from the slices' potentials |
-| `bathymetry` | The bed as a 2D polyline: elevation, depth, slope, normal, shoreline, equal-arc sampling, sand outline |
+| `bathymetry` | The bed as a 2D polyline: elevation, depth, slope, normal, shoreline, equal-arc sampling, sand outline. In 3D a height field (`HeightField`) from a numpy grid, a function or an x, y, z text file: smoothed, cropped, turned into a wave's frame, and where it starts to shoal |
 | `sphKernels` | Cubic spline and Wendland C2 kernels, pair and batch forms |
 | `sphNeighbors` | Every particle pair inside the kernel support, from a k-d tree, optionally across a periodic axis |
-| `sphParticles` | Particle state, energy diagnostics, lattice seeding and region fills, particles added mid-run |
-| `sphBoundaries` | Container and bed boundaries of fixed particles, with enforcement; beds extruded across a walled or periodic 3D channel, or sheared across it with a piston per particle row |
-| `sphSolver` | Tait equation of state, continuity density, Shepard filter, artificial viscosity, XSPH, CFL step, and the solver that composes them; a periodic spanwise axis |
+| `sphParticles` | Particle state, energy diagnostics, lattice seeding and region fills, columns fitted to a bed, particles added mid-run |
+| `sphBoundaries` | Container and bed boundaries of fixed particles, with enforcement; beds extruded across a walled or periodic 3D channel, or sheared across it with a piston per particle row; a height-field bed in a walled tank, enforced on the GPU |
+| `sphSolver` | Tait equation of state, continuity density, Shepard filter or δ-SPH density diffusion, the kernel gradient correction, wall pressure from the water, artificial viscosity (plain or limited), XSPH, CFL step, and the solver that composes them; a periodic spanwise axis |
 | `sphCompiled` | The solver's per-step sums compiled with numba and run across threads over a cell-linked neighbor list, for 3D runs (`backend = 'compiled'`) |
 | `sphGpu` | The same sums on a GPU through NVIDIA Warp, and the whole time step on the device for `advance` (`backend = 'gpu'`): float32 pair arithmetic, float64 state |
 | `sphFrames` | An SPH run's frames streamed to disk, one `.npz` file each with an index, for runs whose frames do not fit in memory |
-| `waveMakers` | Piston wave maker; solitary wave initial condition |
+| `sphRefinement` | Particle splitting with the smoothing length kept, and merging back, for a finer spacing where the flow needs it |
+| `sphPacking` | Laid particles relaxed into an arrangement the SPH pressure sum holds at rest (Colagrossi et al. 2012); `sphPackingGpu` runs it on the GPU |
+| `waveMakers` | Piston wave maker; first-order and exact solitary wave initial conditions, in 2D and across a 3D bed |
 | `waveBreaking` | For particles: free-surface profile, front face lean, breaking tracker, waterline and runup, kinematic breaking detector. For surface profiles: crest, wave front and its steepest slope, breaking tracker |
 | `constants` | Gravity and water properties |
 
@@ -374,7 +453,9 @@ repo_root/
 │   ├── referenceMaterial/           Thruster reference photographs, dimensions, and STL
 │   └── surfboard/                   The default board exported to STL
 ├── examples/
-│   ├── breakingWave/                Breaking wave animation, particle model
+│   ├── breakingWave/                Breaking wave animation, particle model; the reef-flat validation and the Surf Ranch reef past touchdown
+│   ├── breakingWave3D/              A wave breaking over a turned reef and crossing an oblique one, 3D GPU SPH
+│   ├── gpuBackend/                  The splash-up, the peel and the A-frame on the CPU and GPU backends side by side
 │   ├── surfaceWave/                 Breaking wave animation, free-surface model
 │   ├── overturningWave/             Overturn animation and figures, potential flow
 │   ├── splashUp/                    Splash-up animation, potential flow handed to SPH
@@ -382,12 +463,16 @@ repo_root/
 │   ├── reefBreak/                   Swell over a reef animation, free-surface model
 │   └── reefOverturn/                A reef overturn at jet impact
 ├── tests/                           pytest suite; `-m slow` runs the validation cases
+├── validation/gpuSph/               The δ-SPH breaking-wave model's validation runs (GPU hours each), their references and results
+├── dualSphysics/                    Reference runs of the breaking-wave cases in DualSPHysics: case writers and tools (cross-checks)
+├── openFoam/                        OpenFOAM guide and breaking-wave cases (cross-checks)
 │
 └── src/
     └── pysurf/
         ├── __init__.py              Package facade: `from pysurf import Surfboard`
         ├── Surfboard.py             Parametric board: presets, profiles, cross sections
-        ├── BreakingWave.py          Solitary wave breaking on a plane beach, particles (SPH)
+        ├── BreakingWave.py          Solitary wave breaking over any 2D bed, particles (SPH)
+        ├── BreakingWave3D.py        Solitary wave breaking over a 3D bed from any direction, GPU SPH
         ├── SurfaceBreakingWave.py   Solitary wave breaking on a plane beach, free surface (SGN)
         ├── OverturningWave.py       Plunging jet over any bed, potential flow (BEM)
         ├── ReefBreak.py             Regular swell breaking over a reef, free surface (SGN)
@@ -403,7 +488,7 @@ repo_root/
         ├── errors.py                Exception family
         ├── validation.py            Input rule vocabulary
         ├── waveTheory.py            Linear and solitary wave mechanics, breaking criteria
-        ├── bathymetry.py            2D bed profile
+        ├── bathymetry.py            2D bed profile and 3D height field
         ├── sphKernels.py            SPH kernels
         ├── sphNeighbors.py          Pair search
         ├── sphParticles.py          Particle state and seeding
@@ -412,6 +497,9 @@ repo_root/
         ├── sphCompiled.py           The SPH sums compiled with numba, across threads
         ├── sphGpu.py                The SPH sums and time step on a GPU (NVIDIA Warp)
         ├── sphFrames.py             SPH frames streamed to disk
+        ├── sphRefinement.py         Particle splitting and merging
+        ├── sphPacking.py            Particles relaxed to rest before a run
+        ├── sphPackingGpu.py         The packing steps on a GPU
         ├── sgnSolver.py             Serre-Green-Naghdi equations and the breaking switch
         ├── sgnHandoff.py            SGN state to the boundary element model
         ├── bemSolver.py             Boundary element potential flow, interior flow
@@ -462,7 +550,14 @@ python -m pytest            # unit and verification tests, about 2 minutes
 python -m pytest -m slow    # validation runs, about two hours
 ```
 
-The suite runs headless and needs no install: `pyproject.toml` puts `src/` on the path. The unit tests cover the shared modules, the board's input rules, figures and cross sections (against the reference thruster's STL), the wave theory against its closed forms and limits, each SPH equation against its closed form or a conservation law, the breaking measures on constructed particle arrangements, and a short breaking-wave run through to the GIF. The SGN solver is checked against a lake at rest, Ritter's dam break, the SGN standing-wave frequency and its exact solitary wave, and its wave source, absorbing layer and improved dispersion against linear theory. The boundary element solver is checked against quadrature, an exact harmonic field and the Airy standing-wave period, its jet measures against a constructed jet over a tube, and the flow it hands to SPH (velocity and pressure inside the water) against exact harmonic fields. The hand-off to SPH is checked on still water, on a jet over an empty tube, and on a solitary wave's mass flux; the hand-off from SGN against a linear progressive wave's potential, and its walls against a bore. The slow tests are the validation cases in the tables above: the sloshing period, the solitary celerity, the Grilli breaking point for all three models, the Synolakis runup, the overturn at jet impact against the DNS of Feddersen et al. (2024) and the potential flow scaling of Pick and Feddersen (2026), the SPH continuation against the potential flow over the last tenth of a second before the jet lands, the energy it loses in active breaking against the DNS of Mostert and Deike (2020), the reef overturn against the flume of Blenkinsopp and Chaplin (2008), the exact solitary wave against Clamond and Dutykh (2013), and 2D slices stacked across a ridge against the 2D and 3D overturns of Guyenne and Grilli (2006). The GPU SPH backend repeats four of them against the CPU backends: the sloshing period and the solitary celerity within 0.12%, the energy lost in breaking within the 1.3% spread rounding alone gives that chaotic flow, and the peel's plane energies to five figures. Two slow checks are consistency checks rather than validations: the 3D SPH path, extruded across a periodic channel, against its own 2D path, and the peeling wave against what its construction requires (the incident wave travelling unchanged, a steady peel, each plane repeating the 2D splash-up). The compiled SPH backend is checked against the array formulation to rounding, function by function and over a run; the GPU backend to float32 rounding, function by function on Warp's CPU device and on CUDA, over a run against the compiled backend, with its device-resident steps against its host steps, and on a still tank.
+The suite runs headless and needs no install: `pyproject.toml` puts `src/` on the path. The unit tests cover the shared modules, the board's input rules, figures and cross sections (against the reference thruster's STL), the wave theory against its closed forms and limits, each SPH equation against its closed form or a conservation law, the breaking measures on constructed particle arrangements, and a short breaking-wave run through to the GIF. The SGN solver is checked against a lake at rest, Ritter's dam break, the SGN standing-wave frequency and its exact solitary wave, and its wave source, absorbing layer and improved dispersion against linear theory. The boundary element solver is checked against quadrature, an exact harmonic field and the Airy standing-wave period, its jet measures against a constructed jet over a tube, and the flow it hands to SPH (velocity and pressure inside the water) against exact harmonic fields. The hand-off to SPH is checked on still water, on a jet over an empty tube, and on a solitary wave's mass flux; the hand-off from SGN against a linear progressive wave's potential, and its walls against a bore. The slow tests are the validation cases in the tables above: the sloshing period, the solitary celerity, the Grilli breaking point for all three models, the Synolakis runup, the overturn at jet impact against the DNS of Feddersen et al. (2024) and the potential flow scaling of Pick and Feddersen (2026), the SPH continuation against the potential flow over the last tenth of a second before the jet lands, the energy it loses in active breaking against the DNS of Mostert and Deike (2020), the reef overturn against the flume of Blenkinsopp and Chaplin (2008), the exact solitary wave against Clamond and Dutykh (2013), and 2D slices stacked across a ridge against the 2D and 3D overturns of Guyenne and Grilli (2006). The GPU SPH backend repeats four of them against the CPU backends: the sloshing period and the solitary celerity within 0.12%, the energy lost in breaking within the 1.3% spread rounding alone gives that chaotic flow, and the peel's plane energies to five figures. Two slow checks are consistency checks rather than validations: the 3D SPH path, extruded across a periodic channel, against its own 2D path, and the peeling wave against what its construction requires (the incident wave travelling unchanged, a steady peel, each plane repeating the 2D splash-up). The compiled SPH backend is checked against the array formulation to rounding, function by function and over a run; the GPU backend to float32 rounding, function by function on Warp's CPU device and on CUDA, over a run against the compiled backend, with its device-resident steps against its host steps, and on a still tank. `examples/gpuBackend/` shows the splash-up, the peel and the A-frame run on both, side by side. The δ-SPH scheme's terms are each checked against a closed form or a conservation law. The other checks cover:
+
+- the starts: bed-fitted columns, the jitter, and the packing coming to rest;
+- splitting and merging: mass, momentum and the sections' water;
+- the height field: smoothing against the Gaussian's transform, crops, turns against a closed form, text grids read back;
+- `BreakingWave3D`: its build, and a short GPU run against the exact solitary wave, with and without the crest zone.
+
+The δ-SPH validation runs in the tables above (Grilli's breaking point, the Surf Ranch overturn, Mostert and Deike's energy loss, Guyenne and Grilli's ridge, the oblique reef and the Oregon State reef flat) take 1 to 32 GPU hours each and run outside the suite, from the scripts in [validation/gpuSph/](validation/gpuSph/README.md), each with its criteria and recorded result.
 
 ---
 
@@ -473,6 +568,7 @@ The suite runs headless and needs no install: `pyproject.toml` puts `src/` on th
 | Surfboard Geometry | Python / NumPy | Parametric Bezier profiles and cross sections |
 | Water Simulation | Python / NumPy, SciPy | WCSPH sloshing, wave tanks and breaking waves; Serre-Green-Naghdi breaking waves |
 | Compiled SPH | Python / Numba | The SPH sums across threads, for 3D runs |
+| GPU SPH | Python / NVIDIA Warp | The SPH time step on a GPU, for 2D and 3D runs of millions of particles |
 | Wave Theory | Python | Linear and solitary waves, wave makers, breaking criteria |
 | Visualization | Python / Matplotlib, Plotly, Pillow | Profile views, cross sections, 3D surfaces, breaking-wave GIFs |
 | Units | Python / Pint | Conversion between shaping units and SI |
@@ -496,7 +592,9 @@ The suite runs headless and needs no install: `pyproject.toml` puts `src/` on th
 - [ ] Validate the shape of the splash-up against laboratory profiles of a breaking solitary wave
 - [ ] Give the SPH splash-up an air phase, so the tube's air cushions its collapse
 - [ ] Bed friction in the swash, so the runup of a breaking wave can be measured
-- [ ] Reach Grilli's breaking point with particles: density diffusion ($\delta$-SPH) and higher resolution
+- [X] Reach Grilli's breaking point with particles: density diffusion ($\delta$-SPH) on a GPU, from 64 particles per depth
+- [X] A solitary wave breaking over a 3D bed from any direction, with a finer spacing that follows the crest (`BreakingWave3D`)
+- [ ] Particles that dissipate as a breaking wave does once the jet lands, checked against Mostert and Deike's energy loss and the Oregon State reef flat
 - [X] A plunging breaker peeling along an oblique reef in 3D: potential flow slices handed to SPH plane by plane
 - [ ] Validate the peeling breaker against a 3D simulation or a laboratory peel, and replace strip theory's spanwise velocity, which overstates the 3D ridge's by 70%
 - [ ] Extend the breaking wave to periodic waves from the piston wave maker
@@ -518,6 +616,14 @@ The suite runs headless and needs no install: `pyproject.toml` puts `src/` on th
 - Guyenne, P. & Grilli, S.T. (2006). Numerical study of three-dimensional overturning waves in shallow water. *J. Fluid Mech.* 547, 361-388.
 - Clamond, D. & Dutykh, D. (2013). Fast accurate computation of the fully nonlinear solitary surface gravity waves. *Computers & Fluids* 84, 35-38.
 - Molteni, D. & Colagrossi, A. (2009). A simple procedure to improve the pressure evaluation in hydrodynamic context using the SPH. *Comput. Phys. Commun.* 180, 861-872.
+- Bonet, J. & Lok, T.-S.L. (1999). Variational and momentum preservation aspects of smooth particle hydrodynamic formulations. *Comput. Methods Appl. Mech. Eng.* 180, 97-115.
+- Adami, S., Hu, X.Y. & Adams, N.A. (2012). A generalized wall boundary condition for smoothed particle hydrodynamics. *J. Comput. Phys.* 231, 7057-7075.
+- Colagrossi, A., Bouscasse, B., Antuono, M. & Marrone, S. (2012). Particle packing algorithm for SPH schemes. *Comput. Phys. Commun.* 183, 1641-1653.
+- Feddersen, F., Hanson, K., Mostert, W. & Fincham, A. (2024). Modelling wind-induced changes to overturning wave shape. *J. Fluid Mech.* 1000, A48.
+- Mostert, W. & Deike, L. (2020). Inertial energy dissipation in shallow-water breaking waves. *J. Fluid Mech.* 890, A12.
+- Quiroga, P.D. & Cheung, K.F. (2013). Laboratory study of solitary-wave transformation over bed-form roughness on fringing reefs. *Coastal Engineering* 80, 35-48.
+- Quiroga, P.D. (2012). *Effects of bed-form roughness on long-wave transformation over fringing reefs*. MS thesis, University of Hawaii at Manoa (the smooth-bed gauge records and the flume geometry used above).
+- Domínguez, J.M. et al. (2022). DualSPHysics: from fluid dynamics to multiphysics problems. *Computational Particle Mechanics* 9, 867-895.
 - Finney, Ben & Houston, James. *Surfing: A History of the Ancient Hawaiian Sport*.
 
 ---

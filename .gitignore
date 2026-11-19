@@ -31,8 +31,9 @@ venv/
 *.tmp.*
 tmpclaude-*
 
-# Media output
+# Media output; the animations in examples/ are kept
 *.mp4
+!examples/**/*.mp4
 
 # OS
 Thumbs.db

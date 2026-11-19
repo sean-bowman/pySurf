@@ -1,0 +1,20 @@
+{
+  "source": "DualSPHysics v5.4 (Dominguez et al. 2022), pySurf's reference run of the Surf Ranch reef turned 25 degrees at 32 particles per depth (dualSphysics/tools/reefRuns.py, 2026-11-09), measured with pySurf's breaking tracker under decision 14 of the GPU SPH roadmap. A cross-check: no measurement exists for this tank.",
+  "tank": "Flat at h0 offshore; the 0.0693 face from the toe at x = 30 + y tan 25 h0 to a shelf 0.371 h0 deep; the shelf to an end wall at x = 52 h0; 4 h0 across between free-slip walls (mDBC slip mode 3). A piston tuned so the gauge at x = 20 h0 reads H/h0 = 0.6 within 0.8 percent.",
+  "times": "seconds after the crest passes the gauge at x = 20 h0, with h0 = 1 m",
+  "columns": ["breakingTime_s", "crestPastShelfEdge_h0", "breakingHeight_h0", "touchdownTime_s", "impactHeight_h0", "overturnAreaOverImpactHeightSquared", "jetAreaOverImpactHeightSquared", "overturnAngle_deg"],
+  "sections": {
+    "0.0": [4.749, -0.28, 0.605, 4.760, 0.607, 0.012, 0.008, 23.2],
+    "0.5": [5.148, 1.21, 0.639, 5.632, 0.593, 0.145, 0.129, 44.0],
+    "1.0": [5.222, 1.29, 0.641, 5.645, 0.594, 0.155, 0.139, 43.1],
+    "1.5": [5.305, 1.35, 0.639, 5.715, 0.580, 0.167, 0.170, 36.3],
+    "2.0": [5.337, 1.29, 0.635, 5.763, 0.583, 0.139, 0.160, 43.0],
+    "2.5": [5.372, 1.12, 0.628, 5.779, 0.581, 0.124, 0.125, 34.2],
+    "3.0": [5.445, 1.08, 0.630, 5.910, 0.559, 0.151, 0.109, 46.5],
+    "3.5": [5.448, 0.82, 0.607, 5.884, 0.566, 0.150, 0.130, 41.1],
+    "4.0": [5.110, -0.86, 0.589, 5.111, 0.589, 0.017, 0.012, 35.3]
+  },
+  "breakCrossingSpeed_m_s": 9.90,
+  "crestLineAngleFromYAxis_deg": 19.0,
+  "note": "The wall sections, y = 0 and 4 h0, read breaking at the toe: artifacts of the wall rows, left out of the crossing speed."
+}

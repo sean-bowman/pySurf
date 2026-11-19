@@ -61,8 +61,14 @@ Guyenne, P. & Grilli, S.T. (2006) -- Numerical study of three-dimensional overtu
                             Validation status
 ----------------------------------------------------------------------
 
-The scheme is `BreakingWave`'s, whose 2D validation status that module states. In 3D the model is
-compared with the sloping ridge of Guyenne and Grilli (2006), with the criteria of
+The model's claim is the breaking point, at 32 particles per depth with the crest's water split
+(below). The overturn's shape in 3D is not validated. After breaking the scheme dissipates too
+little: Mostert and Deike's energy loss and the Oregon State reef flat both fail in 2D
+(`pysurf.BreakingWave`). Bores and splashes are therefore unvalidated, and probably high.
+
+The scheme is `BreakingWave`'s, whose 2D validation status that module states. The 3D runs below
+are in validation/gpuSph (ridge.py, obliqueReef.py, extrudedReef.py, shoalReef.py). In 3D the
+model is compared with the sloping ridge of Guyenne and Grilli (2006), with the criteria of
 tests/testValidationRidgeOverturn.py, run at 32 particles per depth in the full tank outside the
 test suite (5 to 7 GPU hours a ridge).
 
@@ -124,6 +130,14 @@ in the narrow one. The free-slip walls mirror the bed into a chevron reef, and t
 moves the breaking point over the first 3 h0. In the interior the breaking point creeps shoreward
 by an amount the runs do not split between the incident wave's numerical decay and the far wall.
 That is a limit of a tank between free-slip walls; the closed form covers the crest only.
+
+The Surf Ranch reef turned 25 degrees, between free-slip walls 4 h0 apart, is cross-checked against
+DualSPHysics's run of the same tank, not validated: no measurement exists for it. At 32 particles
+per depth with the crest's water split (32 GPU hours, 6.6 million particles by the end), the seven
+inner sections break within 0.04 s of DualSPHysics's, 0.15 to 0.42 h0 farther past the shelf edge
+and 8 to 11 percent higher. The break crosses the span at 10.31 m/s against its 9.90. The jets land
+0.03 to 0.13 s after DualSPHysics's; in 2D pySurf's landed 0.55 s before. The runs do not say which
+code departs from 2D in this tank.
 
 The refinement zone in 3D is cross-checked against the 2D model, not validated: no measurement of
 a 3D overturn's lip exists. On gate 1's Surf Ranch reef with the bed uniform across y (the exact

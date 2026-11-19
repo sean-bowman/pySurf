@@ -1,0 +1,17 @@
+{
+  "source": "Quiroga, P. D. (2012). Effects of bed-form roughness on long-wave transformation over fringing reefs. MS thesis, University of Hawaii at Manoa, figure 25 (p. 46). Journal version: Quiroga, P. D. and Cheung, K. F. (2013). Laboratory study of solitary-wave transformation over bed-form roughness on fringing reefs. Coastal Engineering 80, 35-48, doi 10.1016/j.coastaleng.2013.05.002.",
+  "facility": "Large Wave Flume, O. H. Hinsdale Wave Research Laboratory, Oregon State University: 104 m long, 3.66 m wide; piston wavemaker at x = 0; 1:12 reef face rising 2.36 m to a flat reef; rigid wall at x = 83.7 m.",
+  "case": "Smooth concrete control tests (BF0), water depth h0 = 2.66 m, hf = 0.30 m over the reef flat; incident solitary wave height H0 measured at WG1 (x = 17.64 m).",
+  "quantity": "eta_max / H0, the largest surface elevation over still water as the bore passes, divided by H0",
+  "gaugesX_m": {"WG9": 54.41, "WG10": 58.05, "WG11": 61.70, "WG12": 65.38, "WG13": 72.72, "WG14": 80.03},
+  "reefEdgeX_m": {"value": 54.8, "note": "scaled from the thesis's figure 3, which labels only 0.0 and 83.7 m and draws the edge under WG9; the thesis bounds it to 54.4 to 54.9 m (Table 1 lists WG9 at 54.41 m on the slope and WG10 at 58.05 m on the flat; figure 3 scaled against the gauge markers reads 54.37 m, against its 0.0 and 83.7 m ticks 54.90 m)"},
+  "method": "Page rendered at 400 dpi (digitizeFig25.py); each panel's y scale fitted to its axis and dashed gridlines (residual under 0.004); blue BF0 markers found by color and their pixel centroid taken. Only markers fully visible (500 pixels or more) are kept: partly covered markers show only their upper arms and read high.",
+  "uncertainty": "about 0.02 in eta_max / H0 from digitizing; laboratory scatter between bed forms is larger",
+  "points": {
+    "0.1": {"WG9": 1.166, "WG12": 1.206, "WG13": 1.013, "WG14": 0.903},
+    "0.2": {"WG14": 0.668},
+    "0.3": {"WG12": 0.733, "WG14": 0.570},
+    "0.4": {"WG12": 0.608, "WG13": 0.558, "WG14": 0.530},
+    "0.45": {"WG12": 0.603, "WG13": 0.549, "WG14": 0.529}
+  }
+}
