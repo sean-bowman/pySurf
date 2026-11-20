@@ -395,6 +395,8 @@ The animations in `examples/breakingWave3D/`:
 - [shoalReef32.mp4](examples/breakingWave3D/shoalReef32.mp4): the GIF above at full resolution.
 - [shoalReef16vs32.mp4](examples/breakingWave3D/shoalReef16vs32.mp4): the same reef at 16 and 32 particles per depth, stacked. At 16 the shelf is six particles deep, and the breaker curls without a clean jet.
 - [obliqueReef16.mp4](examples/breakingWave3D/obliqueReef16.mp4): the oblique reef above, at 16 particles per depth.
+- [pipelineLeft16.mp4](examples/breakingWave3D/pipelineLeft16.mp4): a measured bed, the left at Pipeline, Oahu. The bed is the USACE 2013 topobathy lidar with depths capped at 10 m, turned so a 3 m solitary wave from 295 degrees travels along +x, in a tank 160 m across with 15 sections. At 16 particles per depth with the crest zone the run took 10.5 GPU hours. The break starts toward the south-southwest end of the tank and peels along the crest toward the north-northeast at about twice the crest's speed.
+- [pipelineStrips16.mp4](examples/breakingWave3D/pipelineStrips16.mp4): six of its sections, 20 m apart, side on at true scale and stacked so the peel runs down the frame. Each lip throws a sheet one or two split particles (0.3 m) thick that breaks into droplets before it lands, so no tube closes. Not validated: 16 particles per depth is below the model's claim, and the overturn lies past the breaking point.
 
 ### [WaterSim →](src/pysurf/WaterSim/README.md)
 
