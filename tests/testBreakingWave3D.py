@@ -14,13 +14,16 @@ tank reads its own crest, a split keeps the fluid's mass and the section's water
 particle twice at one level, and on the GPU a refined run splits its crest and still gives the
 exact flow mid-depth within 5 percent. A wave arriving at an angle meets the bed turned so it
 travels along +x, a region crops the bed, and the wave starts a half length offshore of where the
-bed shoals, with the wall a half length behind it.
+bed shoals, with the wall a half length behind it. A run restored from a checkpoint, its crest's
+water split and partly merged, ends bit for bit where the run that never stopped ends, and a
+checkpoint refuses a run with other settings.
 
 Sean Bowman [11/10/2026]
 
 '''
 
 import math
+import pickle
 
 import numpy as np
 import pytest
@@ -242,8 +245,52 @@ def testTheZoneMergesWhatLiesBehindEachStripsCrest(flat):
     with pytest.raises(InvalidInputError):
         BreakingWave3D(flat, height, crestX, depth = 1.0, backend = 'numpy', refinement = {'mergeBehind': 0.5})
 
+def testACheckpointRefusesAnotherRunsSettings(flat, tmp_path):
+
+    path = tmp_path / 'run.pkl'
+    wave = BreakingWave3D(flat, height, crestX, depth = 1.0, particlesPerDepth = 4, backend = 'numpy')
+    with pytest.raises(InvalidInputError):
+        wave.saveCheckpoint(path)
+    wave.build()
+    wave.saveCheckpoint(path)
+    assert path.exists() and not (tmp_path / 'run.pkl.partial').exists()
+
+    finer = BreakingWave3D(flat, height, crestX, depth = 1.0, particlesPerDepth = 8, backend = 'numpy')
+    with pytest.raises(InvalidInputError):
+        finer.restore(path)
+    other = tmp_path / 'other.pkl'
+    other.write_bytes(pickle.dumps({'format': 'something else'}))
+    with pytest.raises(InvalidInputError):
+        wave.restore(other)
+
 wp = pytest.importorskip('warp')
 cuda = pytest.mark.skipif(wp.get_cuda_device_count() == 0, reason = 'needs a CUDA device')
+
+@cuda
+def testACheckpointContinuesTheRunAsIfItHadNotStopped(tmp_path):
+
+    # The zone splits the crest's water from the start and merges what falls a quarter depth behind
+    # it, so the checkpoint carries split masses and the merge tally as well as the trackers' records
+    field = HeightField.fromFunction(lambda x, y: 0.0 * x, (0.0, 10.0, 0.0, 1.0), 1.0 / 32.0, stillWaterLevel = 1.0)
+    zone = {'fromX': 0.0, 'above': 0.1, 'behind': 0.25, 'ahead': 0.5, 'mergeBehind': 0.25}
+    path = tmp_path / 'run.pkl'
+    unbroken = BreakingWave3D(field, height, 6.0, particlesPerDepth = 8, refinement = zone)
+    unbroken.run(endTime = 0.2, progress = False)
+    assert unbroken.mergedGroups > 0
+    unbroken.saveCheckpoint(path)
+    unbroken.run(endTime = 0.4, progress = False)
+
+    resumed = BreakingWave3D(field, height, 6.0, particlesPerDepth = 8, refinement = zone)
+    resumed.restore(path)
+    resumed.run(endTime = 0.4, progress = False)
+
+    # The GPU's sums run in a fixed order, so the two runs agree bit for bit
+    assert resumed.solver.clock == unbroken.solver.clock
+    assert resumed.mergedGroups == unbroken.mergedGroups
+    for name in ('positions', 'velocities', 'densities', 'pressures', 'masses', 'isFluid'):
+        assert np.array_equal(getattr(resumed.particles, name), getattr(unbroken.particles, name)), name
+    assert resumed.tracker.times == unbroken.tracker.times
+    assert resumed.tracker.crestX == unbroken.tracker.crestX
 
 @cuda
 def testAShortRunReadsItsSectionAndCarriesTheWave():

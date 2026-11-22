@@ -34,6 +34,8 @@ low-dissipation scheme in a rectangular tank over a height field.
                 as little water as it can before it breaks
     snapshots   the whole fluid's positions, velocities and masses at `recordTimes`, and each
                 section's fluid every `frameInterval`
+    checkpoint  the run's whole state between calls to `run` (`saveCheckpoint`), which `restore`
+                takes up in a new process, so a long run can stop and continue as if it had not
 
 `velocity` gives the flow at any points at a snapshot's time: the Shepard-normalized Wendland
 average of the fluid around each point within the kernel's support, each particle weighted by its
@@ -116,8 +118,10 @@ tests/testBreakingWave3D.py checks the build: over a flat bed the start is the 2
 every lattice row, with the 2D rule's boundary pressures; a section reads its own two rows; and
 after a short run on the GPU the flow mid-depth under the crest lies within 5 percent of the exact
 wave's (2 percent at 8 and 16 particles per depth), with or without the crest's water split; that
-a wave arriving at an angle meets the bed turned so it travels along +x; and that `offshoreReach`
-leaves the first-order wave's tails at 1 percent of its height at the shoaling bed and the wall.
+a wave arriving at an angle meets the bed turned so it travels along +x; that `offshoreReach`
+leaves the first-order wave's tails at 1 percent of its height at the shoaling bed and the wall;
+and that a run restored from a checkpoint on the GPU, its crest's water split and partly merged,
+ends bit for bit where the run that never stopped ends.
 
 A wave arriving at an angle is checked against the closed form for an endless oblique reef, run
 outside the test suite. There the flow is a pattern travelling along the contours, so the crest
@@ -161,9 +165,13 @@ Sean Bowman [11/10/2026]
 # Standard library imports
 from __future__ import annotations
 
+import hashlib
 import math
+import os
+import pickle
 import time as timeModule
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from pathlib import Path
 
 # Third-party imports
 import numpy as np
@@ -191,6 +199,9 @@ refinementDefaults3D = {**refinementDefaults, 'strip': 0.25}
 refinementRules3D = refinementRules + (
     numericRule('strip', 'Refinement strip width across the tank', minimum = 0.0),
 )
+
+# Written into every checkpoint; `restore` refuses a file without it
+checkpointFormat = 'pysurf.BreakingWave3D checkpoint 1'
 
 def offshoreReach(field: HeightField, waveHeight: float, depth: float | None = None, share: float = 0.05,
                   fraction: float = 0.01) -> tuple[float, float]:
@@ -556,6 +567,27 @@ class BreakingWave3D:
 
         return total
 
+    def _checkpointSettings(self) -> dict:
+
+        '''
+
+        The settings a checkpoint must match: everything that shapes the tank, the bed (by a hash of
+        its heights), the start and the scheme.
+
+        '''
+
+        field = self.field
+        return {'bounds': tuple(float(v) for v in field.bounds), 'stillWaterLevel': float(field.stillWaterLevel),
+                'bed': hashlib.sha256(np.ascontiguousarray(field.z, dtype = float).tobytes()).hexdigest(),
+                'waveHeight': self.waveHeight, 'crestX': self.crestX, 'depth': self.depth,
+                'particlesPerDepth': self.particlesPerDepth, 'sections': self.sections, 'sectionRows': self.sectionRows,
+                'searchFromX': self.searchFromX, 'trackInterval': self.trackInterval, 'wallTop': self.wallTop,
+                'smoothingLengthRatio': self.smoothingLengthRatio, 'alphaViscosity': self.alphaViscosity,
+                'soundSpeedFactor': self.soundSpeedFactor, 'solverOptions': self.solverOptions,
+                'bedFitted': self.bedFitted, 'startJitter': self.startJitter, 'startSeed': self.startSeed,
+                'startPacking': self.startPacking, 'faceArc': self.faceArc, 'refinement': self.refinement,
+                'direction': self.direction}
+
     # -- Public Methods -- #
     @property
     def spacing(self) -> float:
@@ -739,6 +771,81 @@ class BreakingWave3D:
                 nextReport += stopTime / 10.0
 
         self.wallClockSeconds += timeModule.perf_counter() - started
+
+    def saveCheckpoint(self, path: str | Path) -> None:
+
+        '''
+
+        Write the run's state between calls to `run`: the particles (densities, pressures and the
+        zone's split masses and lengths included), the solver's clock, the trackers' records, the
+        merge tally and the wall clock, with the settings it was run with. `restore` from it
+        continues the run as if it had not stopped. The file is a pickle written to a partial file
+        first, which then replaces any earlier checkpoint at `path`, so a crash while writing leaves
+        the earlier one whole. The section frames and snapshots stay out: a run that keeps them for
+        long holds gigabytes, and a script that needs them writes them as it goes.
+
+        Parameters:
+        -----------
+        path : str | Path
+            The checkpoint file
+
+        Raises:
+        -------
+        InvalidInputError : Before `build`, with no state to save.
+
+        '''
+
+        if self.solver is None:
+            raise InvalidInputError('There is no state to save before build.', parameterName = 'path', value = str(path))
+        p, path = self.particles, Path(path)
+        state = {'format': checkpointFormat, 'settings': self._checkpointSettings(),
+                 'particles': {field.name: getattr(p, field.name) for field in fields(p)},
+                 'clock': self.solver.clock, 'trackers': self.trackers, 'fluidMass': self._fluidMass,
+                 'mergedGroups': self.mergedGroups, 'mergedEnergy': self.mergedEnergy,
+                 'wallClockSeconds': self.wallClockSeconds}
+        partial = path.with_name(path.name + '.partial')
+        with open(partial, 'wb') as handle:
+            pickle.dump(state, handle, protocol = 5)
+        os.replace(partial, path)
+
+    def restore(self, path: str | Path) -> None:
+
+        '''
+
+        Take up a checkpoint `saveCheckpoint` wrote for a run with these settings: build the tank,
+        its boundary and the solver, then put the saved particles, clock, trackers and tallies in
+        place of the start. The section frames and snapshots start empty. Load only checkpoints
+        this code wrote: the file is a pickle, and unpickling runs code.
+
+        Parameters:
+        -----------
+        path : str | Path
+            The checkpoint file
+
+        Raises:
+        -------
+        InvalidInputError : If the file is not a checkpoint of this format, or a run with other
+            settings wrote it.
+
+        '''
+
+        with open(path, 'rb') as handle:
+            state = pickle.load(handle)
+        if not isinstance(state, dict) or state.get('format') != checkpointFormat:
+            raise InvalidInputError('The file is not a BreakingWave3D checkpoint of this format.', parameterName = 'path',
+                                    value = str(path))
+        if state['settings'] != self._checkpointSettings():
+            raise InvalidInputError('A run with other settings wrote the checkpoint.', parameterName = 'path',
+                                    value = str(path))
+        self.build()
+        self.particles = ParticleSystem(**state['particles'])
+        self.solver.restore(self.particles, **state['clock'])
+        self.trackers = state['trackers']
+        self.sectionFrames = {y: [] for y in self.sections}
+        self.snapshots, self.snapshotMasses = {}, {}
+        self._fluidMass = state['fluidMass']
+        self.mergedGroups, self.mergedEnergy = state['mergedGroups'], state['mergedEnergy']
+        self.wallClockSeconds = state['wallClockSeconds']
 
     def velocity(self, points: np.ndarray, time: float) -> np.ndarray:
 

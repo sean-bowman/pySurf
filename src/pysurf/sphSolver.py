@@ -1696,6 +1696,46 @@ class WcsphSolver:
 
         return result
 
+    def restore(self, particles: ParticleSystem, time: float, step: int, timeStep: float) -> None:
+
+        '''
+
+        Take up a saved state in place of `initialize`: the particles as they stood between two
+        calls to `advance` or `step`, densities and pressures included, and the solver's clock
+        (`clock`). The next call continues the saved run. On the GPU backend `advance` takes the
+        whole state from the host at every call, so the host arrays are the whole state.
+
+        Parameters:
+        -----------
+        particles : ParticleSystem
+            The saved particles, boundary included, in their saved order
+        time : float
+            Simulated time [s]
+        step : int
+            Steps taken
+        timeStep : float
+            The last step's size [s]
+
+        Raises:
+        -------
+        ValueError : If the boundary has a piston, whose mask follows the particle arrays and is
+            not part of the saved state.
+
+        '''
+
+        if getattr(self._boundary, '_pistonMask', None) is not None:
+            raise ValueError('A boundary with a piston cannot take up a saved state; its mask is not saved.')
+        self._particles = particles
+        self._time, self._step, self._dt = float(time), int(step), float(timeStep)
+        uniform = particles.masses.size > 0 and bool(np.all(particles.masses == particles.masses[0]))
+        self._masses = float(particles.masses[0]) if uniform else particles.masses
+        self._updatePairs()
+
+    @property
+    def clock(self) -> dict:
+        '''The simulated time [s], the steps taken and the last step's size [s], as `restore` takes them.'''
+        return {'time': self._time, 'step': self._step, 'timeStep': self._dt}
+
     @property
     def shortestLength(self) -> float:
         '''The shortest smoothing length among the particles, which sets the time step [m].'''
