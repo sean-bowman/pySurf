@@ -917,6 +917,8 @@ class BreakingWave3D:
                 'breakingTime': point.time if point is not None else None,
                 'breakingCrestX': point.crestX if point is not None else None,
                 'breakingCrestHeight': point.crestHeight if point is not None else None,
+                'breakingTroughHeight': point.troughHeight if point is not None else None,
+                'breakingWaveHeight': point.waveHeight if point is not None else None,
                 'touchedDown': tracker.touchdownSurface is not None,
                 'touchdownTime': tracker.touchdownTime if tracker.touchdownSurface is not None else None,
             }

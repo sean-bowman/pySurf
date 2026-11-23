@@ -161,6 +161,48 @@ def freeSurfaceProfile(positions: np.ndarray, x0: float, x1: float, columnWidth:
 
     return centers, elevation
 
+def troughAhead(centers: np.ndarray, elevation: np.ndarray, crestX: float, reach: float = np.inf) -> float:
+
+    '''
+
+    The lowest free surface shoreward of a crest: the least elevation among the wet columns from
+    the crest to the first empty one or to `reach` past the crest, the water the wave is about to
+    run into [m], after a running median over three columns. The crest's elevation less this is the
+    crest-to-trough breaking height of laboratory breakers (Blenkinsopp and Chaplin 2008; Kiger and
+    Duncan 2012); ahead of a solitary wave it is still water. The median drops a single column that
+    catches part of a particle column: where bed-fitted columns straddle the profile's bins, and
+    against a wall, such a column read 0.05 to 0.12 h0 below still water among neighbors at it.
+
+    Parameters:
+    -----------
+    centers, elevation : np.ndarray
+        A free-surface profile (`freeSurfaceProfile`) [m]; NaN in empty columns
+    crestX : float
+        The crest's position [m]
+    reach : float
+        How far past the crest the trough is looked for [m]; the tracker takes twice its face reach
+
+    Returns:
+    --------
+    float : the trough's elevation [m]; NaN when the column just ahead of the crest is empty
+
+    '''
+
+    centers = np.asarray(centers)
+    ahead = np.flatnonzero((centers > crestX) & (centers <= crestX + reach))
+    wet = np.isfinite(np.asarray(elevation)[ahead])
+    run = ahead[:int(np.argmin(wet)) if not wet.all() else wet.size]
+    if run.size == 0:
+        return float('nan')
+    levels = np.asarray(elevation, dtype = float)[run]
+    if levels.size < 3:
+        return float(np.max(levels))
+    # Each column with its neighbors in the run, the ends reflected, so an end column has two votes against it
+    padded = np.concatenate([levels[1:2], levels, levels[-2:-1]])
+    smoothed = np.median(np.stack([padded[:-2], padded[1:-1], padded[2:]]), axis = 0)
+
+    return float(np.min(smoothed))
+
 def fluidFraction(positions: np.ndarray, spacing: float, lower: np.ndarray, upper: np.ndarray,
                   smoothingRatio: float = 1.3, volumes: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
@@ -638,6 +680,9 @@ class BreakingPoint:
     faceX, faceDepth : float
         Where the smoothed surface's face is steepest, and the still water depth there [m]; NaN
         when the face is read in cells
+    troughHeight : float
+        The lowest free surface shoreward of the crest above still water (`troughAhead`) [m], zero
+        or below for a solitary wave; NaN where none was read
 
     '''
 
@@ -648,11 +693,17 @@ class BreakingPoint:
     depth: float
     faceX: float = float('nan')
     faceDepth: float = float('nan')
+    troughHeight: float = float('nan')
 
     @property
     def breakingIndex(self) -> float:
         '''Hb / hb [-].'''
         return self.crestHeight / self.depth if self.depth > 0.0 else float('inf')
+
+    @property
+    def waveHeight(self) -> float:
+        '''The crest-to-trough breaking height, the crest's elevation less the trough's ahead of it [m].'''
+        return self.crestHeight - self.troughHeight
 
 @dataclass
 class BreakingTracker:
@@ -746,13 +797,15 @@ class BreakingTracker:
             return self.touchdownSurface is not None
         return self.breakingPoint is not None
 
-    def _point(self, time: float, lean: float, crestX: float, crestHeight: float, faceX: float) -> BreakingPoint:
+    def _point(self, time: float, lean: float, crestX: float, crestHeight: float, faceX: float,
+               troughHeight: float) -> BreakingPoint:
 
         '''The breaking point if the wave breaks at this update.'''
 
         faceDepth = float(self.bathymetry.depth(faceX)) if np.isfinite(faceX) else float('nan')
         return BreakingPoint(time = time, lean = lean, crestX = crestX, crestHeight = crestHeight,
-                             depth = float(self.bathymetry.depth(crestX)), faceX = faceX, faceDepth = faceDepth)
+                             depth = float(self.bathymetry.depth(crestX)), faceX = faceX, faceDepth = faceDepth,
+                             troughHeight = troughHeight)
 
     def update(self, time: float, positions: np.ndarray, volumes: np.ndarray | None = None) -> None:
 
@@ -799,6 +852,7 @@ class BreakingTracker:
             lean = frontFaceLean(positions, crestX, swl, s, self.faceReach)
             # The lean is measured in whole cells; the half-cell margin keeps rounding from deciding a tie
             slope, steep = float('nan'), lean > (self.leanThreshold - 0.5) * s
+        troughHeight = troughAhead(centers, elevation, crestX, 2.0 * self.faceReach) - swl
 
         tip = waterlineX(positions, bathymetry, 2.0 * s)
         if np.isfinite(tip):
@@ -816,7 +870,7 @@ class BreakingTracker:
             if self.breakingPoint is None:
                 if crestX >= self.searchFromX and steep:
                     if self._streak == 0:
-                        self._candidate = self._point(time, lean, crestX, crestHeight, faceX)
+                        self._candidate = self._point(time, lean, crestX, crestHeight, faceX, troughHeight)
                     self._streak += 1
                     if self._streak >= self.persistence:
                         self.breakingPoint = self._candidate
@@ -837,7 +891,7 @@ class BreakingTracker:
             if self.touchdownSurface is None and crestX >= self.searchFromX and np.isfinite(slope):
                 if steep:
                     if not self._vertical:
-                        self._runStart, self._runLength = self._point(time, lean, crestX, crestHeight, faceX), 0
+                        self._runStart, self._runLength = self._point(time, lean, crestX, crestHeight, faceX, troughHeight), 0
                     self._runLength += 1
                     # Until touchdown, the longest run so far; the earlier of two equal ones
                     if self._runLength > self._longestRun:

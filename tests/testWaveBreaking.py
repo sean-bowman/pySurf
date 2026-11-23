@@ -27,7 +27,7 @@ from pysurf.sphParticles import ParticleSystem, fillRegion, latticePoints
 from pysurf.sphRefinement import splitParticles
 from pysurf.waveBreaking import (BreakingDetector, BreakingTracker, ParticleSurface, SurfaceBreakingTracker,
                                  airShare, contourFace, freeSurfaceProfile, frontFaceLean, particleSurface, profileCrest,
-                                 waterlineX, waveFront)
+                                 troughAhead, waterlineX, waveFront)
 
 s = 0.05            # [m] particle spacing
 swl = 1.0           # [m] still water level
@@ -159,7 +159,43 @@ def testTheTrackerRecordsTheCrestAndBreaking():
     assert point.lean == pytest.approx(0.3, abs = 1e-9)
     assert point.crestHeight == pytest.approx(0.4, abs = s)
     assert point.breakingIndex == pytest.approx(point.crestHeight / point.depth)
+    # Still water ahead of the crest: the trough is still water, and H_b is the crest's height
+    assert point.troughHeight == pytest.approx(0.0, abs = 1e-9)
+    assert point.waveHeight == pytest.approx(point.crestHeight, abs = 1e-9)
     assert len(tracker.times) == 6
+
+def testTheTroughIsTheLowestWaterAheadOfTheCrest():
+
+    centers = np.arange(12) + 0.5
+    elevation = np.array([0.0, 0.3, 0.1, -0.1, -0.1, 0.0, np.nan, -0.5, -0.5, 0.0, 0.0, 0.0])
+
+    # The run of wet columns ahead of the crest ends at the empty one; the water past it is not the wave's
+    assert troughAhead(centers, elevation, 1.5) == pytest.approx(-0.1)
+    assert np.isnan(troughAhead(centers, elevation, 5.5))
+    assert np.isnan(troughAhead(centers, elevation, 11.5))
+    # A single column that drops out of still water is no trough, at the end of the run too
+    still = np.zeros(12)
+    still[7] = -0.12
+    still[11] = -0.05
+    assert troughAhead(centers, still, 1.5) == pytest.approx(0.0)
+    # Nor is water past the reach: the two columns at -0.1 lie past it but one
+    assert troughAhead(centers, elevation, 0.5, reach = 3.5) == pytest.approx(0.1)
+
+def testTheTrackerReadsTheDrawdownAheadOfABreakingCrest():
+
+    beach = Bathymetry([-1.0, 3.0, 20.0], [0.0, 0.0, 1.7], stillWaterLevel = swl)
+    tracker = BreakingTracker(beach, s, faceReach = 2.0, searchFromX = -0.5)
+    # The water 1.5 to 3 m stands 0.1 m below still water, the crest's lip leaning past its face
+    lowered = np.vstack([column(-1.0, 1.5, 0.0, swl), column(1.5, 3.0, 0.0, swl - 0.1),
+                         fillRegion(lambda p: (p[:, 0] > 0.0) & (p[:, 0] < np.where(p[:, 1] < swl + 0.2, 1.0, 1.3)),
+                                    [-1.0, swl], [3.0, swl + 0.4], s)])
+    for time in (0.0, 0.1, 0.2):
+        tracker.update(time, lowered)
+    point = tracker.breakingPoint
+
+    assert point is not None
+    assert point.troughHeight == pytest.approx(-0.1, abs = 1e-9)
+    assert point.waveHeight == pytest.approx(point.crestHeight + 0.1, abs = 1e-9)
 
 def testTheKinematicDetectorFiresOnFastParticles():
 

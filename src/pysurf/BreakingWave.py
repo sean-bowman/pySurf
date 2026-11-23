@@ -299,8 +299,9 @@ def overturnMeasures(tracker: BreakingTracker, jet: JetGeometry, stillWaterLevel
 
     A touchdown's measures: its time, where the jet's tip and its impact point lie [m], the impact
     height H_I (the surface's highest point over still water) over the depth, the tube's area and
-    the closed pocket's over d^2, and the overturn measures of Feddersen et al. (2023, 2024) as
-    `OverturningWave` reports them: A_O / H_I^2, A_J / H_I^2, W / L and theta_O [deg].
+    the closed pocket's over d^2, the tube's area over the crest-to-trough breaking height squared
+    (A_c / H_b^2, NaN without a trough), and the overturn measures of Feddersen et al. (2023, 2024)
+    as `OverturningWave` reports them: A_O / H_I^2, A_J / H_I^2, W / L and theta_O [deg].
 
     '''
 
@@ -308,6 +309,10 @@ def overturnMeasures(tracker: BreakingTracker, jet: JetGeometry, stillWaterLevel
     pocket = tracker.touchdownPocket
     pocketArea = 0.5 * abs(float(np.dot(pocket[:, 0], np.roll(pocket[:, 1], -1))
                                  - np.dot(pocket[:, 1], np.roll(pocket[:, 0], -1))))
+    # The tube over the crest-to-trough breaking height squared, as laboratory breakers are read
+    # (Blenkinsopp and Chaplin 2008, A_c / H_b^2)
+    point = tracker.breakingPoint
+    breakingHeight = point.waveHeight if point is not None else float('nan')
 
     return {
         'touchdownTime': tracker.touchdownTime,
@@ -315,6 +320,7 @@ def overturnMeasures(tracker: BreakingTracker, jet: JetGeometry, stillWaterLevel
         'impactX': float(jet.impactPoint[0]),
         'impactHeightOverDepth': impactHeight / depth,
         'cavityAreaOverDepthSquared': jet.cavityArea / depth**2,
+        'cavityAreaOverBreakingHeightSquared': jet.cavityArea / breakingHeight**2,
         'pocketAreaOverDepthSquared': pocketArea / depth**2,
         'overturnAreaOverImpactHeightSquared': jet.cavityArea / impactHeight**2,
         'jetAreaOverImpactHeightSquared': jet.jetArea / impactHeight**2,
@@ -1017,6 +1023,8 @@ class BreakingWave:
                 'breakingTime': point.time,
                 'breakingIndex': point.breakingIndex,
                 'breakingHeightOverDepth': point.crestHeight / self.depth,
+                'breakingTroughOverDepth': point.troughHeight / self.depth,
+                'breakingWaveHeightOverDepth': point.waveHeight / self.depth,
                 'breakingDepthOverDepth': point.depth / self.depth,
                 'breakingDistanceFromToe': (point.crestX - self.toeX) / self.depth,
                 'breakingFaceDepthOverDepth': point.faceDepth / self.depth,

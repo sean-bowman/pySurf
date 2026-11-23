@@ -32,6 +32,7 @@ The model's claim is the breaking point: where and when a solitary wave breaks, 
 | Crest crossing an oblique reef at 30° | `obliqueReef.py` | Closed form, $c_0 / \tan 30°$ | Read against the closed form | Within 1.7% at every distance, 16 ppd, 16 $h_0$ across | Pass |
 | The Surf Ranch reef extruded across y | `extrudedReef.py` | pySurf's 2D model | Half the gates' tolerances | All eight readings, split, 32 ppd | Consistent |
 | The Surf Ranch reef turned 25° | `shoalReef.py` | DualSPHysics, the same tank | None: a cross-check | Breaks within 0.04 s, 8% to 11% higher; lands 0.03 to 0.13 s later | Reported |
+| Tube at touchdown, turned Surf Ranch reef, 3D | `cavityArea.py` | Blenkinsopp and Chaplin (2008), flume, a cross-check | $A_c/H_b^2$ within their points at $h_c/H_o \le 0.9$ (0.154 to 0.408) | 0.233 to 0.258 over the seven inner sections at 32 ppd with the zone | Consistent, a cross-check |
 
 ## Running the cases
 
@@ -42,6 +43,7 @@ python grilliBreaking.py 64
 python surfRanchOverturn.py 128
 python mostertEnergy.py 64 [--dualSphysicsSettings] [--energyBudget]
 python reefFlat.py 128 [--cflNumber 0.225] [--shift 0.5] [--energyBudget]
+python cavityArea.py [<run folder>]
 python solitaryWave.py 32
 python stillTank.py 60
 python ridge.py 0.25 32 [--zone]
@@ -76,7 +78,7 @@ The 2D cases use `BreakingWave` with its defaults for 'deltaSph': Wendland C2 at
 - **Overturn.** `surfRanchOverturn.py` reads five measures at the jet's landing. The pass at 128 particles per depth is not converged: the overturn area runs 0.495, 0.308 and 0.341 $H_I^2$ at 32, 64 and 128, against 0.352.
 - **After breaking.** `mostertEnergy.py` and `reefFlat.py` both fail, in the same direction: the model keeps too much energy once the wave breaks. The model has no turbulence. Its artificial viscosity and density diffusion stand in for the loss, and both shrink with the spacing. The energy budget (`--energyBudget`, `pysurf.sphEnergy`) splits the loss by term: at 64 particles per depth the density diffusion takes three quarters of it and the limited viscosity a quarter, the continuity correction gives a sixth back, and the walls take 14% through the extrapolated wall pressure's work and the clamp at the bed, neither of which a free-slip wall would do. The share lost moves 6% under a rounding-level change to the device kernels (0.165 to 0.156), and the walls' share with it (14% to 8.5%). `reefFlat.py`'s scatter runs (`--cflNumber 0.225`, `--shift 0.5`) show the WG12 failure and its growth from 64 to 128 particles per depth are both larger than the run-to-run spread. The reef edge's position, 54.8 m, is scaled from the thesis's figure; the thesis bounds it to 54.4 to 54.9 m, which moves WG12 by 0.011 $H_0$ at most.
 - **3D construction.** `obliqueReef.py` checks the bed's rotation and the crest's kinematics against a closed form, and `extrudedReef.py` checks the 3D form against the 2D one. In the oblique tank the break crosses 9 to 11% slower than the closed form: the free-slip walls mirror the bed into a chevron, a limit of a walled tank.
-- **Cross-check.** `shoalReef.py` sets the 3D model beside DualSPHysics on a tank with no measurement. The two break together, but pySurf's jet lands after DualSPHysics's, where in 2D it lands 0.55 s before; the runs do not say which code departs from 2D in that tank.
+- **Cross-check.** `shoalReef.py` sets the 3D model beside DualSPHysics on a tank with no measurement. The two break together, but pySurf's jet lands after DualSPHysics's, where in 2D it lands 0.55 s before; the runs do not say which code departs from 2D in that tank. `cavityArea.py` reads the tube at touchdown from a 3D run that saved its whole fluid, against Blenkinsopp and Chaplin's (2008) flume cavities: the shelf's relative depth lies below their range, so the comparison takes their points nearest it, and their waves are regular where this one is solitary.
 
 ## Validation status
 
@@ -100,7 +102,7 @@ The 2D cases use `BreakingWave` with its defaults for 'deltaSph': Wendland C2 at
 | `grilliBreaking.py`, `surfRanchOverturn.py`, `mostertEnergy.py`, `solitaryWave.py`, `stillTank.py` | Gate 1, 2D |
 | `reefFlat.py` | The Oregon State reef flat, 2D |
 | `ridge.py` | Gate 2, 3D |
-| `obliqueReef.py`, `extrudedReef.py`, `shoalReef.py` | The 3D model over reefs |
+| `obliqueReef.py`, `extrudedReef.py`, `shoalReef.py`, `cavityArea.py` | The 3D model over reefs |
 | `reference/quiroga2012Fig25Bf0.json` | The flume's smooth-bed gauge peaks, digitized from Quiroga (2012) figure 25, with the gauge positions and the reef edge's bounds |
 | `reference/dualSphysicsShoal32.json` | DualSPHysics's run of the turned reef, section by section |
 | `results/` | Each run's record |
