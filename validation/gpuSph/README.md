@@ -26,6 +26,8 @@ The model's claim is the breaking point: where and when a solitary wave breaks, 
 | Bore over a reef flat, $H_0/h_0 = 0.4$ | `reefFlat.py` | Quiroga and Cheung (2013), flume | WG12 to WG14 within 10% at 128 ppd | WG12 +24.5% to +29.3% over three runs, clear of their scatter | Fail |
 | Exact solitary wave over 30 $h_0$ of flat bed | `solitaryWave.py` | Clamond and Dutykh (2013), exact | Height lost under 2% | 0.42 to 0.50% at 32 ppd, 0.76% at 64 | Pass |
 | Still water after 20 $\sqrt{d/g}$ | `stillTank.py` | At rest | rms speed under $10^{-3}\sqrt{gd}$, fastest under $10^{-2}$ | 60 ppd: $7.1 \times 10^{-4}$, $3.2 \times 10^{-3}$; 30: rms $1.1 \times 10^{-3}$ | Pass at 60 |
+| The same, the fluid sorted in cell order every 0.1 $\sqrt{d/g}$ | `stillTank.py --sorted` | At rest | The same | 60 ppd: $6.1 \times 10^{-4}$, $2.7 \times 10^{-3}$ | Pass |
+| Breaking point, the fluid sorted every 10 breaking checks | `grilliBreaking.py --sortInterval 10` | The unsorted run; Grilli et al. (1997) | Time, $H_b$ and $h_b$ within 1% of the unsorted run; Grilli's criteria | 64 ppd: within $2 \times 10^{-6}$ of the unsorted run; +4.3%, -8.4% | Pass |
 | 3D breaking point, sloping ridge, k = 0.10 to 0.50 | `ridge.py` | Guyenne and Grilli (2006), 3D potential flow | Time and crest height 5%, crest position 0.5 $h_0$ | 32 ppd: four of five k pass; k = 0.25 crest +0.53 $h_0$ | Fail at k = 0.25 |
 | The same at k = 0.25 with the crest zone | `ridge.py --zone` | Guyenne and Grilli (2006) | The same | Time +2.9%, crest +0.39 $h_0$, height -0.2% | Pass |
 | Flow under the crest, k = 0.25 | `ridge.py` | Guyenne and Grilli (2006), figure 16 | Largest speed 10%, spanwise ratio 30% | -0.3%, +0.1%; with the zone -0.6%, +1.0% | Pass |
@@ -39,13 +41,13 @@ The model's claim is the breaking point: where and when a solitary wave breaks, 
 The scripts need an NVIDIA GPU and pySurf's GPU dependency, NVIDIA Warp (`pip install -e .[gpu]` from the repository root). Run them from this folder:
 
 ```bash
-python grilliBreaking.py 64
+python grilliBreaking.py 64 [--sortInterval 10]
 python surfRanchOverturn.py 128
 python mostertEnergy.py 64 [--dualSphysicsSettings] [--energyBudget]
 python reefFlat.py 128 [--cflNumber 0.225] [--shift 0.5] [--energyBudget]
 python cavityArea.py [<run folder>]
 python solitaryWave.py 32
-python stillTank.py 60
+python stillTank.py 60 [--sorted]
 python ridge.py 0.25 32 [--zone]
 python obliqueReef.py 16 --span 16 --skip -3
 python extrudedReef.py 2d 32 --split
@@ -79,6 +81,7 @@ The 2D cases use `BreakingWave` with its defaults for 'deltaSph': Wendland C2 at
 - **After breaking.** `mostertEnergy.py` and `reefFlat.py` both fail, in the same direction: the model keeps too much energy once the wave breaks. The model has no turbulence. Its artificial viscosity and density diffusion stand in for the loss, and both shrink with the spacing. The energy budget (`--energyBudget`, `pysurf.sphEnergy`) splits the loss by term: at 64 particles per depth the density diffusion takes three quarters of it and the limited viscosity a quarter, the continuity correction gives a sixth back, and the walls take 14% through the extrapolated wall pressure's work and the clamp at the bed, neither of which a free-slip wall would do. The share lost moves 6% under a rounding-level change to the device kernels (0.165 to 0.156), and the walls' share with it (14% to 8.5%). `reefFlat.py`'s scatter runs (`--cflNumber 0.225`, `--shift 0.5`) show the WG12 failure and its growth from 64 to 128 particles per depth are both larger than the run-to-run spread. The reef edge's position, 54.8 m, is scaled from the thesis's figure; the thesis bounds it to 54.4 to 54.9 m, which moves WG12 by 0.011 $H_0$ at most.
 - **3D construction.** `obliqueReef.py` checks the bed's rotation and the crest's kinematics against a closed form, and `extrudedReef.py` checks the 3D form against the 2D one. In the oblique tank the break crosses 9 to 11% slower than the closed form: the free-slip walls mirror the bed into a chevron, a limit of a walled tank.
 - **Cross-check.** `shoalReef.py` sets the 3D model beside DualSPHysics on a tank with no measurement. The two break together, but pySurf's jet lands after DualSPHysics's, where in 2D it lands 0.55 s before; the runs do not say which code departs from 2D in that tank. `cavityArea.py` reads the tube at touchdown from a 3D run that saved its whole fluid, against Blenkinsopp and Chaplin's (2008) flume cavities: the shelf's relative depth lies below their range, so the comparison takes their points nearest it, and their waves are regular where this one is solitary.
+- **Sorted particle data.** `--sorted` and `--sortInterval` reorder the fluid's state in the GPU hash grid's cell order (`WcsphSolver.sortParticles`). Sorted, the still tank passes and the breaking point at 64 particles per depth matches the unsorted run to $2 \times 10^{-6}$; after breaking the two part as rounding changes make them. Timed on the turned Surf Ranch reef at 16 particles per depth with the crest zone, from a checkpoint at $t' = 17$ to 18.5 (429 steps), sorting every 10 and 40 breaking checks took 0.3% and 4.1% less time than no sorting. The rule set before the runs made sorting the default only at 15% or more, so `sortInterval` is off by default.
 
 ## Validation status
 
@@ -86,7 +89,7 @@ The 2D cases use `BreakingWave` with its defaults for 'deltaSph': Wendland C2 at
   - the breaking point in 2D at 64 and 128 particles per depth;
   - the overturn's shape at the jet's landing in 2D at 128 particles per depth;
   - the breaking point and the flow under it in 3D at 32 particles per depth with the crest zone;
-  - the solitary wave over a flat bed, and still water at 60 particles per depth.
+  - the solitary wave over a flat bed, and still water at 60 particles per depth, sorted or not.
 - **Cross-checked, not validated:** the 3D model against 2D on an extruded reef, and against DualSPHysics on a turned reef.
 - **Failed, standing as limits of the scheme:**
   - the surface before the jet lands;

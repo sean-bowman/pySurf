@@ -455,6 +455,9 @@ class BreakingWave:
     energyBudget : bool
         Keep the solver's energy budget from the start (`WcsphSolver.trackEnergy`), recorded with
         each frame, for `breakingBudget`. Not on the compiled backend
+    sortInterval : int
+        Reorder the fluid's state in the GPU hash grid's cell order (`WcsphSolver.sortParticles`)
+        after every `sortInterval`-th breaking check; 0 for never
 
     '''
 
@@ -466,7 +469,8 @@ class BreakingWave:
                  solverOptions: dict | None = None, bathymetry: Bathymetry | None = None,
                  startX: float | None = None, startingWave: str = 'exact', refinement: dict | None = None,
                  bedFitted: bool | None = None, startJitter: float | None = None, startSeed: int = 1,
-                 faceArc: float | None = None, startPacking: bool | None = None, energyBudget: bool = False) -> None:
+                 faceArc: float | None = None, startPacking: bool | None = None, energyBudget: bool = False,
+                 sortInterval: int = 0) -> None:
 
         self.depth = depth                          # [m]
         self.waveHeight = waveHeight                # [m]
@@ -492,6 +496,10 @@ class BreakingWave:
         self.faceArc = float(faceArc if faceArc is not None
                              else jitteredFaceArc if self.startJitter > 0.0 else latticeFaceArc)
         self.energyBudget = bool(energyBudget)
+        self.sortInterval = int(sortInterval)
+        if self.sortInterval < 0:
+            raise InvalidInputError('The sort interval is a count of breaking checks, 0 or more.',
+                                    parameterName = 'sortInterval', value = self.sortInterval)
 
         # Speed of sound as a multiple of the solitary wave celerity, and simulated time between
         # breaking checks in units of sqrt(d / g)
@@ -895,6 +903,8 @@ class BreakingWave:
                 nextTrack += trackStep
                 if self.refinement is not None:
                     self._refineCrest()
+                if self.sortInterval and len(tracker.times) % self.sortInterval == 0:
+                    solver.sortParticles()
             if solver.time >= nextFrame:
                 if not np.all(np.isfinite(self.particles.positions)):
                     raise NumericalInstabilityError('Particle positions stopped being finite.',

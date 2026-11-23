@@ -124,6 +124,10 @@ the pressure, the viscosity, gravity, the continuity sum and its correction, the
 walls and the floor move into the fluid's kinetic, potential and elastic energy, taken from the
 step's own arithmetic, so the terms sum to the change of the three energies to rounding.
 
+`sortParticles` reorders the fluid's state, between steps, in the order the GPU's hash grid visits
+its cells (`cellOrderKey`), so a thread's reads land in nearby memory; the boundary keeps its
+indices, and the flow changes only in the order of floating-point sums.
+
 References:
 -----------
 Monaghan, J.J. (1989) -- On the problem of penetration in particle methods, J. Comput. Phys. 82
@@ -163,8 +167,9 @@ closes, against still damping noise laid over that strain (at least half what th
 from the noise alone, under a tenth of what it takes from both), against conserving linear and
 angular momentum, and against any pair's dissipation going negative, the continuity rate against
 zero for a rigid translation, the Shepard filter against returning a uniform density unchanged, and
-a still tank initialized hydrostatically against staying at rest. tests/testSphEnergy.py checks the
-energy budget's terms against the change of the fluid's energy over the steps (closure).
+a still tank initialized hydrostatically against staying at rest, the cell key against the hash
+grid's order, and a sorted run against the unsorted one up to the order of sums. tests/testSphEnergy.py
+checks the energy budget's terms against the change of the fluid's energy over the steps (closure).
 
 The solver is validated against the linear first-mode sloshing period of a rectangular tank in
 tests/testValidationSloshing.py, and against the first-order solitary wave celerity in
@@ -1181,6 +1186,37 @@ def xsphVelocity(velocities: np.ndarray, masses: np.ndarray, densities: np.ndarr
 
     return velocities + epsilon * correction
 
+def cellOrderKey(positions: np.ndarray, cellWidth: float, shape: tuple) -> np.ndarray:
+
+    '''
+
+    Each position's cell index in the order a Warp hash grid sorts its points by: cells `cellWidth`
+    wide from the origin, wrapped onto the grid's `shape` (cells along x, y and z), x fastest, then
+    y, then z. Sorting the particles' state by it puts memory in the order the GPU's threads visit
+    the particles (`WcsphSolver.sortParticles`).
+
+    Parameters:
+    -----------
+    positions : np.ndarray
+        Particle positions, shape (N, 2) or (N, 3) [m]
+    cellWidth : float
+        The grid's cell width, one support [m]
+    shape : tuple
+        The grid's cell counts along x, y and z; z is 1 in 2D
+
+    Returns:
+    --------
+    np.ndarray : each position's cell index, int64
+
+    '''
+
+    cells = np.floor(np.asarray(positions, dtype = float) / cellWidth).astype(np.int64)
+    nx, ny, nz = (int(count) for count in shape)
+    x, y = np.mod(cells[:, 0], nx), np.mod(cells[:, 1], ny)
+    z = np.mod(cells[:, 2], nz) if cells.shape[1] == 3 else np.zeros_like(x)
+
+    return (z * ny + y) * nx + x
+
 def cflTimeStep(smoothingLength: float, soundSpeed: float, maxSpeed: float, maxAcceleration: float,
                 cflNumber: float, maxTimeStep: float) -> float:
 
@@ -1837,6 +1873,41 @@ class WcsphSolver:
         self._updatePairs()
 
         return result
+
+    def sortParticles(self) -> np.ndarray:
+
+        '''
+
+        Reorder the fluid particles' state among the fluid slots in the order the GPU's hash grid
+        visits its cells (`cellOrderKey`), between steps, so a thread's own reads and its neighbors'
+        land in nearby memory. Splitting appends daughters to the end of the arrays and merging
+        fills gaps from the end, so a refined crest is otherwise the least ordered water in a run.
+        The boundary keeps its particles and their indices; the flow changes only in the order of
+        floating-point sums.
+
+        Returns:
+        --------
+        np.ndarray : the permutation applied: slot k now holds what slot order[k] held
+
+        '''
+
+        p, config = self._particles, self._config
+        fluid = np.flatnonzero(p.isFluid)
+        if self._gpu is not None:
+            cellWidth, shape = 2.0 * self._gpu.smoothingLength, self._gpu.gridShape
+        else:
+            cellWidth = config.supportRadius
+            extent = np.zeros(3)
+            extent[:config.dimensions] = config.domainSize
+            shape = tuple(int(count) for count in np.maximum(np.ceil(extent / cellWidth).astype(int) + 3, 1))
+        key = cellOrderKey(p.positions[fluid], cellWidth, shape)
+        order = np.arange(p.nParticles)
+        order[fluid] = fluid[np.argsort(key, kind = 'stable')]
+        p.permute(order)
+        if np.ndim(self._masses):
+            self._masses = p.masses
+
+        return order
 
     def trackEnergy(self, enabled: bool = True) -> None:
 

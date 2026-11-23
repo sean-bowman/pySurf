@@ -366,6 +366,23 @@ def testDeviceStepsFollowHostSteps():
     assert deviceParticles.velocities == pytest.approx(hostParticles.velocities, abs = 1e-4)
     assert deviceParticles.densities == pytest.approx(hostParticles.densities, rel = 1e-6)
 
+def testASortedDeviceRunFollowsTheUnsortedOne():
+
+    # Sorted after ten device steps, the run differs from the unsorted one only in the order of its
+    # float32 sums, to the tolerance the device keeps against the host
+    plain, plainParticles, _ = sloshingSolver('gpu')
+    ordered, orderedParticles, _ = sloshingSolver('gpu')
+    plain.advance(1.0, maxSteps = 10)
+    ordered.advance(1.0, maxSteps = 10)
+    order = ordered.sortParticles()
+    plain.advance(1.0, maxSteps = 50)
+    ordered.advance(1.0, maxSteps = 50)
+
+    assert ordered.time == pytest.approx(plain.time, rel = 1e-5)
+    assert orderedParticles.positions == pytest.approx(plainParticles.positions[order], abs = 1e-7)
+    assert orderedParticles.velocities == pytest.approx(plainParticles.velocities[order], abs = 1e-4)
+    assert orderedParticles.densities == pytest.approx(plainParticles.densities[order], rel = 1e-6)
+
 def testDeviceStepsFollowHostStepsWithTheViscosityLimiter():
 
     host, hostParticles, _ = sloshingSolver('gpu', viscosityLimiter = True)

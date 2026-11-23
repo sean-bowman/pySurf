@@ -32,7 +32,7 @@ from pysurf.sphParticles import ParticleSystem, latticePoints
 from pysurf.sphSolver import (artificialViscosity, cflTimeStep, continuityRate, correctionMatrices, densityDiffusionRate, extrapolatedWallPressure, hydrostaticDensity,
                               hydrostaticDensityDifference, limitedVelocityDifference, pairAccelerations, scatterAdd, shepardDensity,
                               freeSurface, shiftedVelocityChange, shiftingDisplacement, shiftingFields, speedOfSound, summationDensity, taitDensity,
-                              taitEquationOfState, velocityGradients, xsphVelocity, SimulationConfig, WcsphSolver)
+                              taitEquationOfState, velocityGradients, xsphVelocity, cellOrderKey, SimulationConfig, WcsphSolver)
 from pysurf.WaterSim.scenarios.sloshingTank import SloshingTankConfig, createSloshingTank
 
 rho0, c0 = 1000.0, 20.0
@@ -701,3 +701,65 @@ def testAnExtrudedFlowInAPeriodicChannelStaysPlanar():
 
     assert np.max(np.abs(particles.velocities[:, 1])) < 1e-12
     assert np.all((particles.positions[:, 1] >= 0.0) & (particles.positions[:, 1] < period))
+
+def testTheCellKeyFollowsTheHashGridsOrder():
+
+    # x fastest, then y, then z, cells wrapped onto the grid
+    positions = np.array([[0.5, 0.5, 0.5], [1.5, 0.5, 0.5], [0.5, 1.5, 0.5], [0.5, 0.5, 1.5], [4.5, 0.5, 0.5],
+                          [-0.5, 0.5, 0.5]])
+    assert list(cellOrderKey(positions, 1.0, (4, 3, 2))) == [0, 1, 4, 12, 0, 3]
+    assert list(cellOrderKey(positions[:3, :2], 1.0, (4, 3, 1))) == [0, 1, 4]
+
+def sloshingSolver(**options) -> tuple:
+
+    '''A small sloshing tank tilted 10 degrees on the array solver, with any further configuration fields.'''
+
+    tank = SloshingTankConfig(tankWidth = 0.2, tankHeight = 0.15, fillRatio = 0.5, initialTiltDeg = 10.0,
+                              particleSpacing = 0.005)
+    config, particles, boundary = createSloshingTank(tank)
+    config.maxTimeStep = 1e-3
+    for name, value in options.items():
+        setattr(config, name, value)
+    solver = WcsphSolver(config, boundary = boundary)
+    solver.initialize(particles)
+
+    return solver, particles
+
+def testSortingOrdersTheFluidByCellAndLeavesTheBoundary():
+
+    solver, particles = sloshingSolver()
+    for _ in range(5):
+        solver.step()
+    before = {name: getattr(particles, name).copy() for name in ('positions', 'velocities', 'densities', 'isFluid')}
+    order = solver.sortParticles()
+    fluid = before['isFluid']
+    config = solver.config
+
+    # The boundary keeps its slots; the fluid's slots hold the same particles, now in cell order
+    assert np.array_equal(order[~fluid], np.flatnonzero(~fluid))
+    assert np.array_equal(np.sort(order[fluid]), np.flatnonzero(fluid))
+    assert np.array_equal(particles.isFluid, fluid)
+    for name in ('positions', 'velocities', 'densities'):
+        assert np.array_equal(getattr(particles, name), before[name][order]), name
+    shape = (int(np.ceil(config.domainSize[0] / config.supportRadius)) + 3,
+             int(np.ceil(config.domainSize[1] / config.supportRadius)) + 3, 1)
+    keys = cellOrderKey(particles.positions[fluid], config.supportRadius, shape)
+    assert np.all(np.diff(keys) >= 0)
+
+def testASortedRunFollowsTheUnsortedOne():
+
+    # The same 30 steps, one run sorted after the fifth: the flow differs only in the order of sums
+    plain, plainParticles = sloshingSolver()
+    ordered, orderedParticles = sloshingSolver()
+    for _ in range(5):
+        plain.step()
+        ordered.step()
+    order = ordered.sortParticles()
+    for _ in range(25):
+        plain.step()
+        ordered.step()
+
+    assert orderedParticles.positions == pytest.approx(plainParticles.positions[order], abs = 1e-12)
+    assert orderedParticles.velocities == pytest.approx(plainParticles.velocities[order], abs = 1e-9)
+    assert orderedParticles.densities == pytest.approx(plainParticles.densities[order], rel = 1e-12)
+

@@ -15,9 +15,14 @@ Recorded with these settings: at 60 particles per depth the rms reaches 7.1e-4 a
 passes. At 30 the rms reaches 1.1e-3 at 20 sqrt(d/g) and the fastest 3.9e-3 (2026-11-19): fails, on
 the rms at one sample.
 
-    python stillTank.py <ppd>
+With --sorted the run advances 0.1 sqrt(d/g) at a time, about 110 steps at 60 particles per depth,
+and reorders the fluid's state in the GPU hash grid's cell order after each (`WcsphSolver.sortParticles`);
+the same criterion applies. Recorded sorted (2026-11-23): at 60 particles per depth the rms reaches
+6.1e-4 and the fastest 2.7e-3: passes.
 
-Writes results/stillTank_<ppd>.json.
+    python stillTank.py <ppd> [--sorted]
+
+Writes results/stillTank_<ppd>[_sorted].json.
 
 Sean Bowman [11/19/2026]
 
@@ -36,7 +41,7 @@ from pysurf.sphSolver import WcsphSolver
 from pysurf.WaterSim.scenarios import sloshingTank
 from pysurf.WaterSim.scenarios.sloshingTank import SloshingTankConfig, createSloshingTank
 
-def main(ppd: int) -> dict:
+def main(ppd: int, ordered: bool = False) -> dict:
 
     '''Run the tank at `ppd` particles per depth and report it against the criterion.'''
 
@@ -64,7 +69,12 @@ def main(ppd: int) -> dict:
     worstFastest = worstRms = 0.0
     readings = []
     for target in np.arange(5.0, 40.01, 5.0):
-        solver.advance(target * scale)
+        if ordered:
+            for block in np.arange(target - 4.9, target + 0.01, 0.1):
+                solver.advance(block * scale)
+                solver.sortParticles()
+        else:
+            solver.advance(target * scale)
         speeds = np.linalg.norm(particles.velocities[fluid], axis = 1) / speedScale
         rms = float(np.sqrt(np.mean(speeds**2)))
         readings.append({'time': float(target), 'rms': rms, 'fastest': float(speeds.max())})
@@ -74,12 +84,14 @@ def main(ppd: int) -> dict:
     passes = worstRms < 1e-3 and worstFastest < 1e-2
     print(f'{ppd} ppd from 20 sqrt(d/g) on: rms up to {worstRms:.1e}, fastest {worstFastest:.1e} sqrt(g d) '
           f'(limits 1e-3 and 1e-2): {verdict(passes)}; {particles.nFluid} particles', flush = True)
-    record = {'case': 'stillTank', 'particlesPerDepth': ppd, 'fluidParticles': int(particles.nFluid), 'readings': readings,
+    record = {'case': 'stillTank', 'particlesPerDepth': ppd, 'sorted': ordered, 'fluidParticles': int(particles.nFluid), 'readings': readings,
               'verdict': {'worstRms': worstRms, 'worstFastest': worstFastest, 'passes': passes}}
-    writeResult(f'stillTank_{ppd}', record)
+    writeResult(f'stillTank_{ppd}' + ('_sorted' if ordered else ''), record)
     return record
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = 'Gate 1: still water stays at rest.')
     parser.add_argument('ppd', type = int, help = 'particles per depth')
-    main(parser.parse_args().ppd)
+    parser.add_argument('--sorted', action = 'store_true', help = 'reorder the fluid in cell order every 0.1 sqrt(d/g)')
+    arguments = parser.parse_args()
+    main(arguments.ppd, arguments.sorted)

@@ -267,20 +267,22 @@ wp = pytest.importorskip('warp')
 cuda = pytest.mark.skipif(wp.get_cuda_device_count() == 0, reason = 'needs a CUDA device')
 
 @cuda
-def testACheckpointContinuesTheRunAsIfItHadNotStopped(tmp_path):
+@pytest.mark.parametrize('sortInterval', [0, 3])
+def testACheckpointContinuesTheRunAsIfItHadNotStopped(tmp_path, sortInterval):
 
     # The zone splits the crest's water from the start and merges what falls a quarter depth behind
-    # it, so the checkpoint carries split masses and the merge tally as well as the trackers' records
+    # it, so the checkpoint carries split masses and the merge tally as well as the trackers' records;
+    # sorted, the run taken up sorts at the same checks
     field = HeightField.fromFunction(lambda x, y: 0.0 * x, (0.0, 10.0, 0.0, 1.0), 1.0 / 32.0, stillWaterLevel = 1.0)
     zone = {'fromX': 0.0, 'above': 0.1, 'behind': 0.25, 'ahead': 0.5, 'mergeBehind': 0.25}
     path = tmp_path / 'run.pkl'
-    unbroken = BreakingWave3D(field, height, 6.0, particlesPerDepth = 8, refinement = zone)
+    unbroken = BreakingWave3D(field, height, 6.0, particlesPerDepth = 8, refinement = zone, sortInterval = sortInterval)
     unbroken.run(endTime = 0.2, progress = False)
     assert unbroken.mergedGroups > 0
     unbroken.saveCheckpoint(path)
     unbroken.run(endTime = 0.4, progress = False)
 
-    resumed = BreakingWave3D(field, height, 6.0, particlesPerDepth = 8, refinement = zone)
+    resumed = BreakingWave3D(field, height, 6.0, particlesPerDepth = 8, refinement = zone, sortInterval = sortInterval)
     resumed.restore(path)
     resumed.run(endTime = 0.4, progress = False)
 

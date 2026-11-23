@@ -346,6 +346,10 @@ class BreakingWave3D:
         bounds
     pivot : tuple | None
         (x, y), the point of `field` the bed turns about [m]; None for the centre of its bounds
+    sortInterval : int
+        Reorder the fluid's state in the GPU hash grid's cell order (`WcsphSolver.sortParticles`)
+        after every `sortInterval`-th breaking check, counted on the trackers' record so a run
+        taken up from a checkpoint sorts at the same checks; 0 for never
 
     '''
 
@@ -358,7 +362,7 @@ class BreakingWave3D:
                  bedFitted: bool = True, startJitter: float | None = None, startSeed: int = 1,
                  faceArc: float | None = None, startPacking: bool | None = None,
                  refinement: dict | None = None, direction: float = 0.0, region: tuple | None = None,
-                 pivot: tuple | None = None) -> None:
+                 pivot: tuple | None = None, sortInterval: int = 0) -> None:
 
         self.direction = float(direction)                   # [deg]
         if self.direction != 0.0:
@@ -395,6 +399,7 @@ class BreakingWave3D:
         self.faceArc = float(faceArc if faceArc is not None
                              else jitteredFaceArc if self.startJitter > 0.0 else latticeFaceArc)
         self.refinement = ({**refinementDefaults3D, **refinement} if refinement is not None else None)
+        self.sortInterval = int(sortInterval)
         self._validateInputs()
 
         self.packing: PackingResult | None = None
@@ -439,6 +444,9 @@ class BreakingWave3D:
         if not (1.0 <= self.faceArc <= 12.0):
             raise InvalidInputError('The face slope arc must lie from 1 to 12 spacings.', parameterName = 'faceArc',
                                     value = self.faceArc)
+        if self.sortInterval < 0:
+            raise InvalidInputError('The sort interval is a count of breaking checks, 0 or more.',
+                                    parameterName = 'sortInterval', value = self.sortInterval)
         if self.refinement is not None:
             unknown = set(self.refinement) - set(refinementDefaults3D)
             if unknown:
@@ -752,6 +760,8 @@ class BreakingWave3D:
                 self._readSections()
                 if self.refinement is not None:
                     self._refineCrest()
+                if self.sortInterval and len(tracker.times) % self.sortInterval == 0:
+                    solver.sortParticles()
                 nextTrack += trackStep
             if solver.time >= nextFrame:
                 if not np.all(np.isfinite(p.positions)):

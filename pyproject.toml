@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pysurf"
 version = "0.1.0"
-description = "Computational engineering portfolio: parametric surfboard design and SPH water simulation"
+description = "pySurf: parametric surfboards and breaking waves (boundary element potential flow, SPH on CPU and GPU, Serre-Green-Naghdi)"
 requires-python = ">=3.10"
 dependencies = [
     "numpy>=1.24",

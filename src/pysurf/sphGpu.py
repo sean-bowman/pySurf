@@ -1427,8 +1427,8 @@ class PairSums:
         self.period = float(period)                                      # [m]
         self.precise = 1 if separationPrecision == 'float64' else 0
         self.device = wp.get_device(device)
-        self.grid = wp.HashGrid(*gridDimensions(domainMin, domainMax, 2.0 * smoothingLength, dimensions),
-                                device = self.device)
+        self.gridShape = gridDimensions(domainMin, domainMax, 2.0 * smoothingLength, dimensions)   # cells along x, y, z
+        self.grid = wp.HashGrid(*self.gridShape, device = self.device)
         self.count = 0
         self.physics: dict = {}
         self.diffusion = {'mode': 0, 'factor': 0.0, 'referenceDensity': 1000.0, 'gravityOverSound': 0.0}

@@ -183,6 +183,24 @@ class ParticleSystem:
 
         return self.lengths if self.lengths is not None else np.full(self.nParticles, float(reference))
 
+    def permute(self, order: np.ndarray) -> None:
+
+        '''
+
+        Reorder every particle's state in place: slot k takes what slot order[k] held.
+
+        Parameters:
+        -----------
+        order : np.ndarray
+            A permutation of range(nParticles)
+
+        '''
+
+        for name in ('positions', 'velocities', 'accelerations', 'densities', 'pressures', 'masses', 'isFluid'):
+            setattr(self, name, getattr(self, name)[order])
+        if self.lengths is not None:
+            self.lengths = self.lengths[order]
+
     # -- Counts -- #
     @property
     def nParticles(self) -> int:
