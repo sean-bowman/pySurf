@@ -6,7 +6,8 @@
 Smoke tests of pysurf.OverturningWave: inputs are checked, the default and reef beds are built, the
 starting surface is the SGN or the exact potential flow solitary wave and can start anywhere the
 wave fits, a short run records frames, including frames at requested times, the frames draw and
-write as a GIF, and an overturn draws with its fitted curve. The breaking
+write as a GIF, and an overturn draws with its fitted curve. The overhang smoothing interval reaches
+the solver, and a run that tracks its smoothing budgets the energy each pass removes. The breaking
 point and the overturn are validated in tests/testValidationOverturning.py.
 
 Sean Bowman [10/11/2026]
@@ -125,6 +126,33 @@ def testAnUnknownStartingWaveIsRejected():
 
     with pytest.raises(InvalidInputError):
         OverturningWave(startingWave = 'cnoidal')
+
+def testTheOverhangSmoothingIntervalReachesTheSolver():
+
+    wave = OverturningWave(steepSmoothingInterval = 6)
+    wave.build()
+
+    assert wave.solver.config.steepSmoothingInterval == 6
+    assert wave.solver.config.smoothingInterval == 10
+    with pytest.raises(InvalidInputError):
+        OverturningWave(steepSmoothingInterval = -1)
+
+def testASmoothingBudgetNeedsTheRunToTrackIt(shortRun):
+
+    with pytest.raises(RuntimeError):
+        shortRun.smoothingBudget()
+
+def testATrackedRunBudgetsItsSmoothing():
+
+    '''Before the face overhangs, a pass every tenth step, each removing a sliver of the wave's energy.'''
+
+    wave = OverturningWave(crestSpacingRatio = 0.05, surfaceSpacingRatio = 0.15, trackSmoothing = True)
+    wave.run(endTime = 1.0, progress = False)
+    budget = wave.smoothingBudget()
+
+    assert budget['passesBeforeOverhang'] == wave.solver.steps // 10 >= 2
+    assert 0.0 < budget['smoothingShareBeforeOverhang'] < 1e-3
+    assert budget['passesDuringOverturn'] == 0 and budget['smoothingShareOverOverturn'] is None
 
 def testFramesAreRecordedAtRequestedTimes():
 

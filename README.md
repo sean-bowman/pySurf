@@ -167,7 +167,7 @@ The breaking point is converged in resolution: from the SGN starting wave, $H_b/
 
 ![Overturning profiles of a solitary wave on a 1:35 slope](examples/overturningWave/grilliProfiles.png)
 
-The overturn is measured as Feddersen et al. (2023, 2024) and Pick and Feddersen (2026) measure it at jet impact: the area $A_O$ enclosed by the overturn boundary, the area $A_J$ of the jet (the water above the tube, where the surface is multi-valued in $x$), both over the square of the highest elevation $H_I$, and the length $L$, width $W$ and angle $\theta_O$ of a Longuet-Higgins (1982) curve fitted to the boundary. Feddersen et al.'s (2024) DNS reproduces in 2D the soliton of their field-scale experiments in the Surf Ranch wave pool. The model runs the same case from the same starting wave, a Green-Naghdi solitary wave of $a_0/h_0 = 0.6$, and meets the criteria set before the comparison for the impact location, height, overturn area, jet area and angle. $W/L$ fails against the DNS but matches the field measurement at zero wind, and Pick and Feddersen's potential flow gives 0.41 for this case, so on this measure the DNS stands apart from both. Across plane slopes the overturn follows Pick and Feddersen's potential flow fits in every measure but the jet area, which is up to 19% above their fit while 12% below the DNS; it grows fast in the last instants before impact, which each study fixes in its own way.
+The overturn is measured as Feddersen et al. (2023, 2024) and Pick and Feddersen (2026) measure it at jet impact: the area $A_O$ enclosed by the overturn boundary, the area $A_J$ of the jet (the water above the tube, where the surface is multi-valued in $x$), both over the square of the highest elevation $H_I$, and the length $L$, width $W$ and angle $\theta_O$ of a Longuet-Higgins (1982) curve fitted to the boundary. Feddersen et al.'s (2024) DNS reproduces in 2D the soliton of their field-scale experiments in the Surf Ranch wave pool. The model runs the same case from the same starting wave, a Green-Naghdi solitary wave of $a_0/h_0 = 0.6$, and meets the criteria set before the comparison for the impact location, height, overturn area, jet area and angle. $W/L$ fails against the DNS but matches the field measurement at zero wind, and Pick and Feddersen's potential flow gives 0.41 for this case, so on this measure the DNS stands apart from both. Across plane slopes the overturn follows Pick and Feddersen's potential flow fits in every measure but the jet area, which is up to 19% above their fit while 12% below the DNS; it grows fast in the last instants before impact, which each study fixes in its own way. The five-point smoothing, every three steps once the face overhangs, accounts for a small part of the excess: smoothing every ten steps lowers the jet area 3 to 9 percent in all five cases, and the three failing cases still stand 9 to 15 percent over the fit, while the smoothing itself removes under 0.07 percent of the wave's energy over the overturn ([validation/overturning/](validation/overturning/smoothingEnergy.py)).
 
 ![The Surf Ranch soliton at jet impact, with the fitted overturn curve](examples/overturningWave/surfRanchOverturn.png)
 
@@ -541,6 +541,7 @@ repo_root/
 │   └── openFoam/                    OpenFOAM guide and breaking-wave cases (cross-checks)
 ├── tests/                           pytest suite; `-m slow` runs the validation cases
 ├── validation/gpuSph/               The δ-SPH breaking-wave model's validation runs (GPU hours each), their references, DualSPHysics's cross-check runs and the results
+├── validation/overturning/          The boundary element model's smoothing diagnostic, run outside the suite
 │
 └── src/
     └── pysurf/
@@ -640,6 +641,7 @@ The δ-SPH validation runs in the tables above (Grilli's breaking point, the Sur
 - [X] A plunging breaker peeling along an oblique reef in 3D: potential flow slices handed to SPH plane by plane
 - [X] A solitary wave breaking over a 3D bed from any direction, with a finer spacing that follows the crest (`BreakingWave3D`)
 - [X] The SPH step's energy budget, term by term, over active breaking (`sphEnergy`)
+- [X] The energy the boundary element model's smoothing removes during the overturn, and how far it moves the jet area
 - [ ] Particles that dissipate as a breaking wave does once the jet lands, checked against Mostert and Deike's energy loss and the Oregon State reef flat
 - [ ] A bed and walls without boundary particles: a boundary term computed from the geometry
 - [ ] A density diffusion term that stays consistent up to the free surface
@@ -650,7 +652,6 @@ The δ-SPH validation runs in the tables above (Grilli's breaking point, the Sur
 - [ ] SGN breaking that dissipates as a plunging breaker does on a steep reef, bringing the reef train's reflection and transmission to the flume's
 - [ ] Validate the shape of the splash-up against laboratory profiles of a breaking solitary wave
 - [ ] Validate the breaking point on a steep reef face against Quiroga and Cheung's (2013) measured breaking depth and height, with both the boundary element and the particle models
-- [ ] Measure the energy the boundary element model's smoothing removes during the overturn, and whether it moves the jet area that fails Pick and Feddersen's fit
 - [ ] Bed friction in the swash, so the runup of a breaking wave can be checked against Synolakis's (1987) measured breaking runup
 - [ ] Validate the peeling breaker against a 3D simulation or a laboratory peel, and replace strip theory's spanwise velocity, which overstates the 3D ridge's by 70%
 - [ ] Extend the breaking wave to periodic waves from the piston wave maker

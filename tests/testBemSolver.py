@@ -11,7 +11,8 @@ the exact harmonic function phi = cosh(k (z + d)) cos(k x) in a rectangle, with 
 bed and walls: the surface flux and the bed potential converge at second order away from the
 corners. The time stepping is checked against the Airy period of a small standing wave at k d = 1
 and k d = 3, where the SGN equations are 0.8 and 13 percent off, and against conservation of volume
-and energy. The geometry helpers are checked on constructed surfaces: a crossing, an overhang and
+and energy. The five-point smoothing is checked on a sawtooth and a cubic, and its record of each
+pass against the run without it and the formula's response. The geometry helpers are checked on constructed surfaces: a crossing, an overhang and
 the tube under it.
 
 Sean Bowman [10/11/2026]
@@ -27,8 +28,8 @@ from scipy.integrate import quad
 from pysurf import constants
 from pysurf.bathymetry import Bathymetry
 from pysurf.bemSolver import (BemConfig, BemSolver, FlowField, elementIntegrals, foldDistance, frontSlopeMinimum,
-                              interiorPotential, interiorVelocity, jetGap, jetGeometry, regridSurface, solveBoundary,
-                              solveNeumann, surfaceCrossesItself, windingShare)
+                              interiorPotential, interiorVelocity, jetGap, jetGeometry, regridSurface, smoothSurface,
+                              solveBoundary, solveNeumann, surfaceCrossesItself, windingShare)
 
 g = constants.gravity
 
@@ -219,6 +220,69 @@ def testVolumeAndEnergyAreConserved():
 
     assert abs(result['volumeChange']) < 1e-7
     assert abs(result['energyChange']) < 1e-4
+
+def testTheSmoothingRemovesATwoNodeSawtoothAndKeepsACubic():
+
+    '''
+    Longuet-Higgins and Cokelet's five-point formula sends (-1)^j to zero and leaves a cubic in j as
+    it is: (-1 - 4 + 10 - 4 - 1) / 16 = 0, and its weights sum to one with zero first, second and
+    third moments.
+    '''
+
+    j = np.arange(21, dtype = float)
+    sawtooth = 0.01 * (-1.0)**j
+    cubic = 0.002 * j**3 - 0.03 * j**2 + 0.1 * j
+    surface, potential = smoothSurface(np.column_stack([j, 1.0 + sawtooth]), cubic + sawtooth)
+
+    assert surface[2:-2, 1] == pytest.approx(1.0, abs = 1e-15)
+    assert potential[2:-2] == pytest.approx(cubic[2:-2], abs = 1e-13)
+    assert surface[:2, 1] == pytest.approx(1.0 + sawtooth[:2]) and potential[-2:] == pytest.approx((cubic + sawtooth)[-2:])
+
+def basinSolver(smoothingInterval: int) -> BemSolver:
+
+    '''A small standing wave at k d = 1 in a closed basin, smoothed every `smoothingInterval` steps, never regridded.'''
+
+    depth, k = 1.0, 1.0
+    width = math.pi / k
+    basin = Bathymetry([0.0, width], [0.0, 0.0], stillWaterLevel = depth)
+    spacing = width / 40
+    solver = BemSolver(basin, BemConfig(surfaceSpacing = spacing, crestSpacing = spacing, crestBehind = 0.0,
+                                        crestAhead = 0.0, transition = 1.0, bedSpacing = spacing, regridInterval = 0,
+                                        smoothingInterval = smoothingInterval))
+    x = np.linspace(0.0, width, 41)
+    solver.setSurface(np.column_stack([x, depth + 0.002 * np.cos(k * x)]), np.zeros_like(x), regrid = False)
+
+    return solver
+
+def testTrackingTheSmoothingLeavesTheStepsAlone():
+
+    '''
+    The same run with and without the record steps to the same surface bit for bit. The record
+    holds a pass every fourth step, and each pass's state after it is the solver's after that step.
+    '''
+
+    plain, tracked = basinSolver(4), basinSolver(4)
+    tracked.trackSmoothing()
+    # The formula scales a mode of k times the node spacing theta by (10 + 8 cos theta - 2 cos 2 theta) / 16
+    theta = math.pi / 40
+    response = (10.0 + 8.0 * math.cos(theta) - 2.0 * math.cos(2.0 * theta)) / 16.0
+    afterPasses = []
+    for _ in range(12):
+        plain.step()
+        tracked.step()
+        if tracked.steps % 4 == 0:
+            afterPasses.append((sum(tracked.energy()), tracked.volume()))
+
+    assert np.array_equal(plain.surface, tracked.surface) and np.array_equal(plain.potential, tracked.potential)
+    assert plain.smoothingPasses is None
+    assert [item.step for item in tracked.smoothingPasses] == [4, 8, 12]
+    for item, (energy, volume) in zip(tracked.smoothingPasses, afterPasses):
+        assert item.kineticAfter + item.potentialAfter == pytest.approx(energy, rel = 1e-12)
+        assert item.volumeAfter == pytest.approx(volume, rel = 1e-12, abs = 1e-15)
+        assert not item.overhanging
+        # A smooth wave loses little to a pass, of the order of 1 - response^2 = 4.8e-6; the two
+        # nodes left at each wall sit at the mode's antinodes, so a pass reads below that, by phase
+        assert abs(item.energyRemoved) < 2.0 * (1.0 - response**2) * item.energyBefore
 
 #----------------------------------------------------------------------#
 # -- Surface Geometry -- #

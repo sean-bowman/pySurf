@@ -74,7 +74,11 @@ wave (-0.03 percent at k d = 1, -0.11 percent at k d = 3) with volume conserved 
 to 1e-5 over two periods. The flow inside the water (`FlowField`) is checked against the same
 harmonic field, the potential to 1.4e-4 and the velocity to 2e-4 k at 80 nodes, both second order
 from an element below the surface, and its pressure against the exact unsteady field with zero
-pressure on the flat surface, to 1.5e-4 of rho u^2. tests/testValidationOverturning.py runs a
+pressure on the flat surface, to 1.5e-4 of rho u^2. The five-point smoothing sends a two-node
+sawtooth to zero and leaves a cubic as it is; recording its passes (`trackSmoothing`) leaves the
+steps unchanged bit for bit, and a pass takes from a smooth standing wave no more than twice
+1 - H^2, H the formula's response at its wavenumber (4.8e-6 at 40 nodes a half wavelength).
+tests/testValidationOverturning.py runs a
 solitary wave on a 1:35 slope against Grilli et al. (1997); the results are in
 `pysurf.OverturningWave`.
 
@@ -1072,6 +1076,58 @@ class BemConfig:
     regridInterval: int = 5
     crestRange: tuple[float, float] | None = None
 
+@dataclass
+class SmoothingPass:
+
+    '''
+
+    One application of the five-point smoothing, with the water's energy and volume over still
+    water just before and just after it, each from a boundary solution of its own surface.
+
+    Parameters:
+    -----------
+    time : float
+        Simulated time of the pass [s]
+    step : int
+        Step the pass followed
+    overhanging : bool
+        Whether the front face overhung, which sets the steep interval
+    kineticBefore, potentialBefore, kineticAfter, potentialAfter : float
+        Kinetic and potential energy per unit width before and after the pass [J/m]
+    volumeBefore, volumeAfter : float
+        Water above still water level per unit width before and after the pass [m^2]
+
+    '''
+
+    time: float
+    step: int
+    overhanging: bool
+    kineticBefore: float
+    potentialBefore: float
+    kineticAfter: float
+    potentialAfter: float
+    volumeBefore: float
+    volumeAfter: float
+
+    @property
+    def energyBefore(self) -> float:
+        '''Energy per unit width just before the pass [J/m].'''
+        return self.kineticBefore + self.potentialBefore
+
+    @property
+    def energyRemoved(self) -> float:
+        '''Energy the pass took out, positive when it lost energy [J/m].'''
+        return self.energyBefore - (self.kineticAfter + self.potentialAfter)
+
+def surfaceVolume(surface: np.ndarray, stillWaterLevel: float) -> float:
+
+    '''Water above still water level per unit width, the signed area under the surface [m^2].'''
+
+    dx = np.diff(surface[:, 0])
+    height = 0.5 * (surface[1:, 1] + surface[:-1, 1]) - stillWaterLevel
+
+    return float(np.sum(height * dx))
+
 class BemSolver:
 
     '''
@@ -1099,6 +1155,7 @@ class BemSolver:
         self.steps = 0
         self.timeStep = 0.0                                     # [s]
         self.velocity: np.ndarray | None = None
+        self.smoothingPasses: list[SmoothingPass] | None = None
 
     # -- Private Helper Methods -- #
     def _bedNodes(self) -> np.ndarray:
@@ -1257,22 +1314,51 @@ class BemSolver:
         overhanging = frontSlopeMinimum(surface) <= 0.0
         smoothing = self.config.steepSmoothingInterval if overhanging else self.config.smoothingInterval
         if smoothing and self.steps % smoothing == 0:
-            surface, potential = smoothSurface(surface, potential)
+            smoothed, smoothedPotential = smoothSurface(surface, potential)
+            if self.smoothingPasses is not None:
+                self.smoothingPasses.append(self._smoothingPass(surface, potential, smoothed, smoothedPotential,
+                                                                overhanging))
+            surface, potential = smoothed, smoothedPotential
         interval = self.config.steepRegridInterval if overhanging else self.config.regridInterval
         regrid = interval and self.steps % interval == 0
         self.setSurface(surface, potential, regrid = bool(regrid))
 
         return dt
 
+    def trackSmoothing(self) -> None:
+
+        '''
+
+        Record every smoothing pass from here on in `smoothingPasses`, with the energy and volume
+        just before and after it. Each record costs two boundary solutions; the steps are unchanged.
+
+        '''
+
+        self.smoothingPasses = []
+
+    def _smoothingPass(self, surface: np.ndarray, potential: np.ndarray, smoothed: np.ndarray,
+                       smoothedPotential: np.ndarray, overhanging: bool) -> SmoothingPass:
+
+        '''The energy and volume of the surface before and after one smoothing pass.'''
+
+        def energyOf(nodes: np.ndarray, phi: np.ndarray) -> tuple[float, float]:
+            solution = solveBoundary(nodes, phi, self.bed, self.config.surfaceSpacing)
+            return flowEnergy(nodes, phi, solution.normalDerivative, self.stillWaterLevel, self.config.gravity)
+
+        kineticBefore, potentialBefore = energyOf(surface, potential)
+        kineticAfter, potentialAfter = energyOf(smoothed, smoothedPotential)
+
+        return SmoothingPass(time = self.time, step = self.steps, overhanging = overhanging,
+                             kineticBefore = kineticBefore, potentialBefore = potentialBefore,
+                             kineticAfter = kineticAfter, potentialAfter = potentialAfter,
+                             volumeBefore = surfaceVolume(surface, self.stillWaterLevel),
+                             volumeAfter = surfaceVolume(smoothed, self.stillWaterLevel))
+
     def volume(self) -> float:
 
         '''Water above still water level per unit width, the signed area under the surface [m^2].'''
 
-        surface = self.surface
-        dx = np.diff(surface[:, 0])
-        height = 0.5 * (surface[1:, 1] + surface[:-1, 1]) - self.stillWaterLevel
-
-        return float(np.sum(height * dx))
+        return surfaceVolume(self.surface, self.stillWaterLevel)
 
     def energy(self, density: float = constants.freshwaterDensity) -> tuple[float, float]:
 

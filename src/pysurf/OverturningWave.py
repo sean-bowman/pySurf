@@ -73,7 +73,12 @@ five cases from 1:30 to 1:15 and H0/h0 = 0.2 to 0.6: A_O/H_I^2 within 6 percent 
 within 6 percent, theta_O within 2.3 degrees and Hb/hb within 4.1 percent, all inside three times
 the fit's RMSE. The jet area A_J/H_I^2 is 2 to 19 percent above the fit, outside three RMSE in
 three of the five. Against the DNS the same measure is 12 percent low; it grows fast in the last
-instants before impact, which each study fixes in its own way.
+instants before impact, which each study fixes in its own way. The five-point smoothing, every
+three steps once the face overhangs, accounts for a small part of the excess
+(validation/overturning/smoothingEnergy.py): every ten steps the jet area falls 3 to 9 percent in
+all five cases, and the three failing cases still stand 9 to 15 percent over the fit; on the Surf
+Ranch soliton it falls from 0.195 to 0.187, further below the DNS. The smoothing itself removes
+under 0.07 percent of the wave's energy over the overturn, and under 0.0013 percent a pass.
 
 The overturn is converged in resolution: on the 1:35 slope the tube is 0.255 d long, 0.279 d high
 and 0.0350 d^2 in area at a crest spacing of 0.02 d, against 0.258 d, 0.282 d and 0.0350 d^2 at
@@ -117,7 +122,7 @@ from pysurf.bathymetry import Bathymetry
 from pysurf.bemSolver import (BemConfig, BemSolver, arcLength, crestIndex, crestSpan, frontSlopeMinimum, jetGap,
                               jetGeometry, selfCrossings, trimLoop)
 from pysurf.errors import InvalidInputError
-from pysurf.validation import applyRules, numericRule
+from pysurf.validation import applyRules, integerRule, numericRule
 
 # Inputs an overturning wave must satisfy before anything is built
 inputRules = (
@@ -128,6 +133,7 @@ inputRules = (
     numericRule('crestSpacingRatio',   'Crest spacing',          minimum = 0.0, maximum = 0.2),
     numericRule('surfaceSpacingRatio', 'Surface spacing',        minimum = 0.0, maximum = 0.5),
     numericRule('frameInterval',       'Frame interval',         units = 's', minimum = 0.0),
+    integerRule('steepSmoothingInterval', 'Smoothing interval once the face overhangs', minimum = 0),
 )
 
 @dataclass
@@ -260,6 +266,11 @@ class OverturningWave:
         The solitary wave to start from: 'serre', the exact Serre-Green-Naghdi wave with potential
         flow's vertical velocity structure, which sheds a small tail as it adjusts; or 'exact', the
         exact potential flow wave (`waveTheory.exactSolitaryWave`), which travels unchanged
+    steepSmoothingInterval : int
+        Steps between five-point smoothings once the front face overhangs; 0 for none
+    trackSmoothing : bool
+        Record each smoothing pass's energy and volume before and after it (`smoothingBudget`), at
+        the cost of two boundary solutions a pass; the run itself is unchanged
 
     '''
 
@@ -269,7 +280,7 @@ class OverturningWave:
                  surfaceSpacingRatio: float = 0.08, frameInterval: float = 0.05, endTime: float | None = None,
                  startX: float | None = None, crestWindowRatio: float = 1.0, initialState: tuple | None = None,
                  crestRange: tuple[float, float] | None = None, recordTimes=None,
-                 startingWave: str = 'serre') -> None:
+                 startingWave: str = 'serre', steepSmoothingInterval: int = 3, trackSmoothing: bool = False) -> None:
 
         self.depth = depth                              # [m]
         self.waveHeight = waveHeight                    # [m]
@@ -286,6 +297,8 @@ class OverturningWave:
         self.crestRange = crestRange                    # [m]
         self.recordTimes = sorted(float(time) for time in recordTimes) if recordTimes is not None else []
         self.startingWave = startingWave
+        self.steepSmoothingInterval = steepSmoothingInterval
+        self.trackSmoothing = trackSmoothing
 
         self.bathymetry: Bathymetry | None = None
         self.solver: BemSolver | None = None
@@ -423,8 +436,10 @@ class OverturningWave:
         config = BemConfig(surfaceSpacing = self.surfaceSpacingRatio * d, crestSpacing = self.crestSpacingRatio * d,
                            crestBehind = 2.0 * window, crestAhead = 1.5 * window, transition = window,
                            bedSpacing = 0.25 * d, farSpacing = 0.2 * d, nearDistance = 8.0 * d,
-                           crestRange = self.crestRange)
+                           crestRange = self.crestRange, steepSmoothingInterval = self.steepSmoothingInterval)
         self.solver = BemSolver(self.bathymetry, config)
+        if self.trackSmoothing:
+            self.solver.trackSmoothing()
 
         bathymetry = self.bathymetry
         if self.initialState is not None:
@@ -615,6 +630,66 @@ class OverturningWave:
                 'overturnAngle': jet.overturnAngle,
                 'overturnFitErrorOverLength': jet.fitError / jet.overturnLength,
             })
+
+        return result
+
+    def smoothingBudget(self) -> dict:
+
+        '''
+
+        The energy the five-point smoothing removed, from a run with `trackSmoothing`, as shares of
+        the wave's energy (positive when energy was lost). Before the face overhangs, the shares are
+        of the energy at the first pass; over the overturn, from the first pass with the face
+        overhanging to the end of the run, they are of the energy at that pass, and the change from
+        everything else (time stepping, regridding, trimmed loops) stands beside the smoothing's.
+
+        Returns:
+        --------
+        dict : passes before and during the overturn; the share removed before it; the share the
+            overturn's passes removed, the share the rest removed, and the mean share of one pass;
+            the overturn's passes' change in volume over the wave's volume. The overturn's entries
+            are None when the face never overhung.
+
+        Raises:
+        -------
+        RuntimeError : If the run did not track its smoothing.
+
+        '''
+
+        passes = self.solver.smoothingPasses if self.solver is not None else None
+        if passes is None:
+            raise RuntimeError('The run did not track its smoothing: build it with trackSmoothing = True.')
+        # A run that ends by going back a step, as a landing found by a crossing does, keeps the
+        # surface from before it, so a pass made in that step is not part of the record
+        passes = [item for item in passes if item.time <= self.solver.time + 1e-12]
+
+        first = next((index for index, item in enumerate(passes) if item.overhanging), None)
+        before = passes[:first] if first is not None else passes
+        result = {
+            'passesBeforeOverhang': len(before),
+            'smoothingShareBeforeOverhang': (sum(item.energyRemoved for item in before) / before[0].energyBefore
+                                             if before else 0.0),
+            'passesDuringOverturn': 0,
+            'smoothingShareOverOverturn': None,
+            'otherShareOverOverturn': None,
+            'meanShareEachPass': None,
+            'volumeChangeOverOverturn': None,
+        }
+        if first is None:
+            return result
+
+        overturn = passes[first:]
+        start = overturn[0].energyBefore
+        removed = sum(item.energyRemoved for item in overturn)
+        lost = start - sum(self.solver.energy())
+        result.update({
+            'passesDuringOverturn': len(overturn),
+            'smoothingShareOverOverturn': removed / start,
+            'otherShareOverOverturn': (lost - removed) / start,
+            'meanShareEachPass': float(np.mean([item.energyRemoved / item.energyBefore for item in overturn])),
+            'volumeChangeOverOverturn': (sum(item.volumeAfter - item.volumeBefore for item in overturn)
+                                         / overturn[0].volumeBefore),
+        })
 
         return result
 
