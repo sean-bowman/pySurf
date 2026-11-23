@@ -27,9 +27,23 @@ fails the other way, and the wave loses about 1 percent of its energy per h0 tra
 breaks. The model has no turbulence; its artificial viscosity and density diffusion stand in for
 the loss.
 
-    python mostertEnergy.py <ppd> [--dualSphysicsSettings]
+With --energyBudget both runs keep the solver's energy budget (`pysurf.sphEnergy`), and the run
+reports over active breaking what each part of the scheme took from the fluid's energy, the still
+reference's taken out (`BreakingWave.breakingBudget`). Reading, set before the runs (2026-11-22): if
+the walls or the time stepping take more than a tenth of the mechanical energy lost, they are part
+of the deficit, and that is looked at before a turbulence closure or an air phase.
 
-Writes results/mostertEnergy_<ppd>[_dualSphysics].json.
+Recorded with the budget (2026-11-23), the share lost unchanged at 0.202 and 0.165: of the energy
+lost in active breaking the density diffusion takes 0.60 and 0.74 at 32 and 64 particles per depth,
+the limited viscosity 0.17 and 0.26, the walls 0.38 and 0.14 (the clamp at the bed 0.08 and 0.07 of
+it), and the continuity correction gives back 0.17; time stepping 0.02 to 0.03, the closure under
+1e-5 J/m. By the reading the walls are part of the deficit at both. A 64 run whose device kernels
+differed only in rounding read a share of 0.156 and the walls at 0.085: at 64 the walls' share sits
+near the line.
+
+    python mostertEnergy.py <ppd> [--dualSphysicsSettings] [--energyBudget]
+
+Writes results/mostertEnergy_<ppd>[_dualSphysics][_budget].json.
 
 Sean Bowman [11/19/2026]
 
@@ -50,36 +64,55 @@ from pysurf.errors import NumericalInstabilityError
 
 mostertShareLost = 0.31
 waveHeight = 0.3
+budgetShareLimit = 0.1          # [-] of the mechanical energy lost, above which the walls or the time stepping read as part of the deficit
 dualSphysics = {'soundSpeed': 20.0, 'smoothingLengthRatio': 1.5,
                 'solverOptions': {'negativePressure': True, 'viscosityLimiter': False, 'boundaryViscosityFactor': 1.0}}
 
-def makeWave(ppd: int, startingWave: str, settings: dict | None) -> BreakingWave:
+def makeWave(ppd: int, startingWave: str, settings: dict | None, energyBudget: bool = False) -> BreakingWave:
 
-    '''The beach run or its still-water reference, with pySurf's settings or `settings`.'''
+    '''The beach run or its still-water reference, with pySurf's settings or `settings`, keeping the energy budget if asked.'''
 
     wave = BreakingWave(depth = 1.0, waveHeight = waveHeight, beachSlope = math.tan(math.radians(3.0)),
                         particlesPerDepth = ppd, scheme = 'deltaSph', backend = 'gpu', startingWave = startingWave,
                         solverOptions = settings['solverOptions'] if settings else None,
                         smoothingLengthRatio = settings['smoothingLengthRatio'] if settings else None,
-                        frameInterval = 0.1 * common.timeScale)
+                        frameInterval = 0.1 * common.timeScale, energyBudget = energyBudget)
     if settings:
         # The scheme sets c0 as a multiple of the wave's speed; this sets it in sqrt(g h0)
         wave.soundSpeedFactor = (settings['soundSpeed'] * math.sqrt(constants.gravity)
                                  / waveTheory.solitaryWaveSpeed(waveHeight, 1.0, constants.gravity))
     return wave
 
-def main(ppd: int, useDualSphysics: bool) -> dict:
+def reportBudget(wave: BreakingWave, still: BreakingWave) -> dict:
+
+    '''The energy budget over active breaking, printed against the reading.'''
+
+    budget = wave.breakingBudget(reference = still)
+    shares = budget['shareOfLoss']
+    partOfDeficit = [name for name in ('walls', 'timeStepping') if abs(shares[name]) > budgetShareLimit]
+    budget['reading'] = {'limit': budgetShareLimit, 'partOfDeficit': partOfDeficit}
+    lost = -budget['mechanicalChange']
+    print(f'  energy budget over active breaking, {lost:.2f} J/m of mechanical energy lost '
+          f'(closure {budget["closure"]:+.2e} J/m):', flush = True)
+    for name, share in shares.items():
+        print(f'    {name:13s} {share:+.4f} of the loss', flush = True)
+    print('  reading: ' + (', '.join(partOfDeficit) + ' part of the deficit' if partOfDeficit
+                           else 'neither the walls nor the time stepping take a tenth of the loss'), flush = True)
+
+    return budget
+
+def main(ppd: int, useDualSphysics: bool, energyBudget: bool = False) -> dict:
 
     '''Run the case at `ppd` particles per depth and report it against the criterion.'''
 
     settings = dualSphysics if useDualSphysics else None
     started = time.perf_counter()
-    still = makeWave(ppd, 'still', settings)
+    still = makeWave(ppd, 'still', settings, energyBudget)
     still.run(progress = False)
     stillPotential = np.array([frame.potentialEnergy for frame in still.frames])
     print(f'{ppd} ppd still water: potential energy change {stillPotential[-1] - stillPotential[0]:+.1f} J/m over the run, '
           f'{time.perf_counter() - started:.0f} s', flush = True)
-    wave = makeWave(ppd, 'exact', settings)
+    wave = makeWave(ppd, 'exact', settings, energyBudget)
     failure = None
     try:
         wave.run(progress = True)
@@ -109,12 +142,16 @@ def main(ppd: int, useDualSphysics: bool) -> dict:
     else:
         record['verdict'] = {'passes': False}
         print(f'{ppd} ppd: active breaking not measured ({dissipation.get("error")}); fails', flush = True)
-    writeResult(f'mostertEnergy_{ppd}' + ('_dualSphysics' if settings else ''), record)
+    if energyBudget and 'energyShareLost' in dissipation:
+        record['budget'] = reportBudget(wave, still)
+    writeResult(f'mostertEnergy_{ppd}' + ('_dualSphysics' if settings else '') + ('_budget' if energyBudget else ''),
+                record)
     return record
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = "Gate 1: the energy lost in active breaking on Mostert and Deike's beach.")
     parser.add_argument('ppd', type = int, help = 'particles per depth')
     parser.add_argument('--dualSphysicsSettings', action = 'store_true', help = "run with DualSPHysics's settings")
+    parser.add_argument('--energyBudget', action = 'store_true', help = 'keep and report the energy budget')
     arguments = parser.parse_args()
-    main(arguments.ppd, arguments.dualSphysicsSettings)
+    main(arguments.ppd, arguments.dualSphysicsSettings, arguments.energyBudget)

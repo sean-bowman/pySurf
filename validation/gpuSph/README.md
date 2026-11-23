@@ -22,6 +22,7 @@ The model's claim is the breaking point: where and when a solitary wave breaks, 
 | Surface 0.1 $\sqrt{h_0/g}$ before the jet lands | `surfRanchOverturn.py` | pySurf's boundary element model | Within 2 spacings | 11, 15, 14 spacings at 32, 64, 128 ppd | Fail |
 | Energy lost in active breaking, $H_0/h_0 = 0.3$ on 3° | `mostertEnergy.py` | Mostert and Deike (2020), DNS | Share within 30% of 0.31 | 0.20, 0.17 at 32, 64 ppd (-35%, -47%) | Fail |
 | The same with DualSPHysics's settings | `mostertEnergy.py --dualSphysicsSettings` | Mostert and Deike (2020) | The same | 0.607, 0.545 at 32, 64 ppd (+96%, +76%) | Fail, a diagnostic |
+| Where that energy goes | `mostertEnergy.py --energyBudget` | The budget's own closure | Walls or time stepping over a tenth of the loss reads as part of the deficit | Diffusion 0.60, 0.74; viscosity 0.17, 0.26; walls 0.38, 0.14; correction -0.17 at 32, 64 ppd; closure under 1e-5 J/m | Walls part of the deficit, a diagnostic |
 | Bore over a reef flat, $H_0/h_0 = 0.4$ | `reefFlat.py` | Quiroga and Cheung (2013), flume | WG12 to WG14 within 10% at 128 ppd | WG12 +24.5% to +29.3% over three runs, clear of their scatter | Fail |
 | Exact solitary wave over 30 $h_0$ of flat bed | `solitaryWave.py` | Clamond and Dutykh (2013), exact | Height lost under 2% | 0.42 to 0.50% at 32 ppd, 0.76% at 64 | Pass |
 | Still water after 20 $\sqrt{d/g}$ | `stillTank.py` | At rest | rms speed under $10^{-3}\sqrt{gd}$, fastest under $10^{-2}$ | 60 ppd: $7.1 \times 10^{-4}$, $3.2 \times 10^{-3}$; 30: rms $1.1 \times 10^{-3}$ | Pass at 60 |
@@ -39,8 +40,8 @@ The scripts need an NVIDIA GPU and pySurf's GPU dependency, NVIDIA Warp (`pip in
 ```bash
 python grilliBreaking.py 64
 python surfRanchOverturn.py 128
-python mostertEnergy.py 64 [--dualSphysicsSettings]
-python reefFlat.py 128 [--cflNumber 0.225] [--shift 0.5]
+python mostertEnergy.py 64 [--dualSphysicsSettings] [--energyBudget]
+python reefFlat.py 128 [--cflNumber 0.225] [--shift 0.5] [--energyBudget]
 python solitaryWave.py 32
 python stillTank.py 60
 python ridge.py 0.25 32 [--zone]
@@ -73,7 +74,7 @@ The 2D cases use `BreakingWave` with its defaults for 'deltaSph': Wendland C2 at
 
 - **Breaking point.** `grilliBreaking.py` is gate 1's breaking-point case and `ridge.py` gate 2's. In 3D the scheme's 2D lag at 32 particles per depth carries over: on the ridge's centre line, run in 2D, the wave breaks 0.37 $\sqrt{h_0/g}$ after Guyenne and Grilli's 2D result, against 0.10 at 64. The crest zone (`--zone`) closes most of it.
 - **Overturn.** `surfRanchOverturn.py` reads five measures at the jet's landing. The pass at 128 particles per depth is not converged: the overturn area runs 0.495, 0.308 and 0.341 $H_I^2$ at 32, 64 and 128, against 0.352.
-- **After breaking.** `mostertEnergy.py` and `reefFlat.py` both fail, in the same direction: the model keeps too much energy once the wave breaks. The model has no turbulence. Its artificial viscosity and density diffusion stand in for the loss, and both shrink with the spacing. `reefFlat.py`'s scatter runs (`--cflNumber 0.225`, `--shift 0.5`) show the WG12 failure and its growth from 64 to 128 particles per depth are both larger than the run-to-run spread. The reef edge's position, 54.8 m, is scaled from the thesis's figure; the thesis bounds it to 54.4 to 54.9 m, which moves WG12 by 0.011 $H_0$ at most.
+- **After breaking.** `mostertEnergy.py` and `reefFlat.py` both fail, in the same direction: the model keeps too much energy once the wave breaks. The model has no turbulence. Its artificial viscosity and density diffusion stand in for the loss, and both shrink with the spacing. The energy budget (`--energyBudget`, `pysurf.sphEnergy`) splits the loss by term: at 64 particles per depth the density diffusion takes three quarters of it and the limited viscosity a quarter, the continuity correction gives a sixth back, and the walls take 14% through the extrapolated wall pressure's work and the clamp at the bed, neither of which a free-slip wall would do. The share lost moves 6% under a rounding-level change to the device kernels (0.165 to 0.156), and the walls' share with it (14% to 8.5%). `reefFlat.py`'s scatter runs (`--cflNumber 0.225`, `--shift 0.5`) show the WG12 failure and its growth from 64 to 128 particles per depth are both larger than the run-to-run spread. The reef edge's position, 54.8 m, is scaled from the thesis's figure; the thesis bounds it to 54.4 to 54.9 m, which moves WG12 by 0.011 $H_0$ at most.
 - **3D construction.** `obliqueReef.py` checks the bed's rotation and the crest's kinematics against a closed form, and `extrudedReef.py` checks the 3D form against the 2D one. In the oblique tank the break crosses 9 to 11% slower than the closed form: the free-slip walls mirror the bed into a chevron, a limit of a walled tank.
 - **Cross-check.** `shoalReef.py` sets the 3D model beside DualSPHysics on a tank with no measurement. The two break together, but pySurf's jet lands after DualSPHysics's, where in 2D it lands 0.55 s before; the runs do not say which code departs from 2D in that tank.
 

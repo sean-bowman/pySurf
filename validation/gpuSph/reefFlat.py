@@ -39,9 +39,12 @@ over the three runs, 24.5 to 29.3 percent above the flume, clear of their scatte
 WG14 the three 128 runs straddle the criterion (+0.6 to +28.6 and -53 to +22.5 percent). 128 runs
 in about 2 GPU hours (346,831 particles), 64 in about 17 minutes.
 
-    python reefFlat.py <ppd> [--ratio 0.4] [--cflNumber 0.225] [--shift 0.5]
+With --energyBudget the run keeps the solver's energy budget (`pysurf.sphEnergy`) and records each
+term and group at every frame, a record of where the bore's energy goes; no criterion applies.
 
-Writes results/reefFlat_<ppd>_r<ratio * 100>[_cfl][_shift].json.
+    python reefFlat.py <ppd> [--ratio 0.4] [--cflNumber 0.225] [--shift 0.5] [--energyBudget]
+
+Writes results/reefFlat_<ppd>_r<ratio * 100>[_cfl][_shift][_budget].json.
 
 Sean Bowman [11/19/2026]
 
@@ -59,6 +62,7 @@ from common import percent, readReference, writeResult
 from pysurf import waveTheory
 from pysurf.bathymetry import Bathymetry
 from pysurf.BreakingWave import BreakingWave
+from pysurf.sphEnergy import budgetGroups
 
 labDepth, labFlat, labEdge, labWall = 2.66, 0.30, 54.8, 83.7      # [m]
 
@@ -101,7 +105,8 @@ def evaluate(times: np.ndarray, columns: np.ndarray, tops: np.ndarray, gauges: d
                          'topMax': float(np.nanmax(tops[window, k])) / ratio}
     return arrivals, speed, results
 
-def main(ppd: int, ratio: float, cflNumber: float | None, shift: float, endTime: float) -> dict:
+def main(ppd: int, ratio: float, cflNumber: float | None, shift: float, endTime: float,
+         energyBudget: bool = False) -> dict:
 
     '''Run the reef flat and read the gauges against the flume.'''
 
@@ -117,7 +122,8 @@ def main(ppd: int, ratio: float, cflNumber: float | None, shift: float, endTime:
                                reefLength = wallX - edgeX)
     wave = BreakingWave(depth = 1.0, waveHeight = ratio, beachSlope = slope, bathymetry = bed, particlesPerDepth = ppd,
                         scheme = 'deltaSph', startingWave = 'exact', backend = 'gpu', frameInterval = 0.02 * common.timeScale,
-                        solverOptions = {'cflNumber': cflNumber} if cflNumber is not None else None)
+                        solverOptions = {'cflNumber': cflNumber} if cflNumber is not None else None,
+                        energyBudget = energyBudget)
     s = wave.spacing
     if shift:
         wave.startX = wave.halfLength + shift * s
@@ -159,7 +165,14 @@ def main(ppd: int, ratio: float, cflNumber: float | None, shift: float, endTime:
               'geometry': {'toeX': toeX, 'edgeX': edgeX, 'wallX': wallX, 'gauges': gauges, 'labEdge_m': labEdge},
               'summary': wave.summary(), 'arrivals': arrivals, 'frontSpeed': speed, 'results': results,
               'times': times, 'columns': columns, 'tops': tops}
-    name = f'reefFlat_{ppd}_r{round(100 * ratio)}' + ('_cfl' if cflNumber is not None else '') + ('_shift' if shift else '')
+    if energyBudget:
+        frameTimes, terms, elastic = wave.budgetHistory()
+        series = [{name: float(values[k]) for name, values in terms.items()} for k in range(len(frameTimes))]
+        record['budget'] = {'times': frameTimes / common.timeScale, 'terms': terms, 'elastic': elastic,
+                            'groups': {name: np.array([budgetGroups(entry)[name] for entry in series])
+                                       for name in budgetGroups(series[0])}}
+    name = (f'reefFlat_{ppd}_r{round(100 * ratio)}' + ('_cfl' if cflNumber is not None else '') + ('_shift' if shift else '')
+            + ('_budget' if energyBudget else ''))
     writeResult(name, record)
     return record
 
@@ -170,5 +183,6 @@ if __name__ == '__main__':
     parser.add_argument('--cflNumber', type = float, default = None, help = 'the time step\'s CFL number (the scheme\'s is 0.25)')
     parser.add_argument('--shift', type = float, default = 0.0, help = 'crest start shoreward [spacings]')
     parser.add_argument('--end', type = float, default = 11.0, help = 'end time [s]')
+    parser.add_argument('--energyBudget', action = 'store_true', help = 'keep and record the energy budget')
     arguments = parser.parse_args()
-    main(arguments.ppd, arguments.ratio, arguments.cflNumber, arguments.shift, arguments.end)
+    main(arguments.ppd, arguments.ratio, arguments.cflNumber, arguments.shift, arguments.end, arguments.energyBudget)

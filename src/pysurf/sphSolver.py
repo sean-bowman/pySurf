@@ -119,6 +119,11 @@ Six options replace parts of that scheme, and the scheme's kernel is a choice:
                         longer step offsets the neighbors; in 3D, h = 2.5 and 3 spacings cost about
                         3.7 and 5.3 times the cubic spline per simulated second.
 
+`trackEnergy` keeps an energy budget (`pysurf.sphEnergy`): each step adds, term by term, the energy
+the pressure, the viscosity, gravity, the continuity sum and its correction, the diffusion, the
+walls and the floor move into the fluid's kinetic, potential and elastic energy, taken from the
+step's own arithmetic, so the terms sum to the change of the three energies to rounding.
+
 References:
 -----------
 Monaghan, J.J. (1989) -- On the problem of penetration in particle methods, J. Comput. Phys. 82
@@ -158,7 +163,8 @@ closes, against still damping noise laid over that strain (at least half what th
 from the noise alone, under a tenth of what it takes from both), against conserving linear and
 angular momentum, and against any pair's dissipation going negative, the continuity rate against
 zero for a rigid translation, the Shepard filter against returning a uniform density unchanged, and
-a still tank initialized hydrostatically against staying at rest.
+a still tank initialized hydrostatically against staying at rest. tests/testSphEnergy.py checks the
+energy budget's terms against the change of the fluid's energy over the steps (closure).
 
 The solver is validated against the linear first-mode sloshing period of a rectangular tank in
 tests/testValidationSloshing.py, and against the first-order solitary wave celerity in
@@ -181,6 +187,7 @@ import numpy as np
 
 # Local imports
 from pysurf import constants
+from pysurf.sphEnergy import deviceTerms, elasticEnergy, elasticSlope, zeroBudget
 from pysurf.sphKernels import SphKernel, createKernel
 from pysurf.sphNeighbors import neighborPairs
 from pysurf.sphParticles import ParticleSystem
@@ -1227,6 +1234,7 @@ class WcsphSolver:
         self._pairs = (np.array([], dtype = np.intp), np.array([], dtype = np.intp))
         self._pairLength: float | np.ndarray = config.smoothingLength  # [m], one, or each pair's h_ij
         self._gravity = abs(float(np.asarray(config.gravity)[-1]))     # [m/s^2]
+        self._energy: dict | None = None                               # [J] per term while `trackEnergy` is on
 
         # Pairs across the seam count one image only: a particle must not reach two images of
         # another, which needs the period longer than twice the kernel's support
@@ -1392,6 +1400,31 @@ class WcsphSolver:
         accelerations[~p.isFluid] = 0.0
         p.accelerations = accelerations
         self._kernelGradients = gradients
+        if self._energy is not None:
+            self._accelerationParts = self._splitAccelerations(gradients, viscosity)
+
+    def _splitAccelerations(self, gradients: np.ndarray, viscosity: np.ndarray) -> dict:
+
+        '''
+
+        The pair accelerations split for the energy budget (`pysurf.sphEnergy`): pressure and
+        viscosity, each from fluid and from boundary neighbors, without gravity [m/s^2]. On the
+        fluid they add up to the accelerations less gravity; boundary-boundary pairs move nothing.
+
+        '''
+
+        p = self._particles
+        i, j = self._pairs
+        count = p.nParticles
+        noPressure, noViscosity = np.zeros(count), np.zeros(len(i))
+        parts = {}
+        for neighbor, pairs in (('Fluid', ~self._boundaryPairs), ('Wall', self._boundaryPairs & self._fluidTouching)):
+            parts['pressure' + neighbor] = pairAccelerations(self._masses, p.densities, p.pressures, i[pairs], j[pairs],
+                                                             gradients[pairs], noViscosity[pairs], count)
+            parts['viscosity' + neighbor] = pairAccelerations(self._masses, p.densities, noPressure, i[pairs], j[pairs],
+                                                              gradients[pairs], viscosity[pairs], count)
+
+        return parts
 
     def _integrate(self, timeStep: float) -> None:
 
@@ -1410,7 +1443,12 @@ class WcsphSolver:
 
         p, config = self._particles, self._config
         fluid = p.isFluid
+        energy = self._energy
+        if energy is not None:
+            startVelocities = p.velocities[fluid].copy()
         p.velocities[fluid] += p.accelerations[fluid] * timeStep
+        if energy is not None:
+            self._addKineticParts(startVelocities, timeStep)
         if self._compiled or self._gpu is not None:
             gpu, h = self._gpu, config.smoothingLength
             if gpu is not None:
@@ -1442,16 +1480,27 @@ class WcsphSolver:
                                           fluid) if config.continuityCorrection else None)
         rate = continuityRate(self._masses, p.velocities, i, j, self._kernelGradients, p.nParticles,
                               self._fluidTouching, corrections)
+        if energy is not None:
+            rateParts = self._splitContinuity(rate)
         if config.densityDiffusion != 'none':
             # The diffusion sees the densities the pressures came from, before this step's update
-            rate += densityDiffusionRate(self._masses, p.densities, i, j, self._separation, self._distance,
-                                         self._kernelGradients, p.nParticles, self._pairLength,
-                                         self._speedOfSound, config.diffusionDelta, config.referenceDensity,
-                                         self._gravity if config.densityDiffusion == 'hydrostatic' else None,
-                                         ~self._boundaryPairs)
+            diffusion = densityDiffusionRate(self._masses, p.densities, i, j, self._separation, self._distance,
+                                             self._kernelGradients, p.nParticles, self._pairLength,
+                                             self._speedOfSound, config.diffusionDelta, config.referenceDensity,
+                                             self._gravity if config.densityDiffusion == 'hydrostatic' else None,
+                                             ~self._boundaryPairs)
+            rate += diffusion
+            if energy is not None:
+                rateParts['diffusion'] = diffusion
+        if energy is not None:
+            startDensities = p.densities[fluid].copy()
         p.densities += rate * timeStep
+        if energy is not None:
+            unfloored = p.densities[fluid].copy()
         if config.densityFloor > 0.0:
             p.densities[fluid] = np.maximum(p.densities[fluid], config.densityFloor * config.referenceDensity)
+        if energy is not None:
+            self._addElasticParts(startDensities, unfloored, rateParts, timeStep)
 
         transport = p.velocities
         if config.xsphEpsilon > 0.0:
@@ -1459,7 +1508,12 @@ class WcsphSolver:
             fluidPairs = fluid[i] & fluid[j]
             transport = xsphVelocity(p.velocities, self._masses, p.densities, i[fluidPairs], j[fluidPairs],
                                      self._kernelValues[fluidPairs], config.xsphEpsilon)
+        if energy is not None:
+            startHeights = p.positions[fluid, -1].copy()
         p.positions[fluid] += transport[fluid] * timeStep
+        if energy is not None:
+            energy['drift'] += self._gravity * float(np.sum(p.masses[fluid] * (p.positions[fluid, -1] - startHeights)))
+            startEnergy = self._fluidEnergy() if config.particleShifting else 0.0
         if config.particleShifting:
             fields = shiftingFields(self._masses, p.densities, i, j, self._separation, self._kernelValues,
                                     self._kernelGradients, p.nParticles,
@@ -1472,8 +1526,78 @@ class WcsphSolver:
             p.positions[fluid] += shift[fluid]
             p.densities[fluid] += densityChange[fluid]
             p.velocities[fluid] += velocityChange[fluid]
+            if energy is not None:
+                energy['shifting'] += self._fluidEnergy() - startEnergy
         if config.periodicWidth is not None:
             p.positions[fluid, 1] = np.mod(p.positions[fluid, 1], config.periodicWidth)
+
+    def _splitContinuity(self, rate: np.ndarray) -> dict:
+
+        '''
+
+        The continuity rate split for the energy budget: the plain sum over fluid neighbors and over
+        boundary neighbors, and the kernel gradient correction's part, what the corrected sum
+        adds to the plain one [kg/(m^3 s)].
+
+        '''
+
+        p = self._particles
+        i, j = self._pairs
+        plain = {}
+        for name, pairs in (('continuityFluid', ~self._boundaryPairs),
+                            ('continuityWall', self._boundaryPairs & self._fluidTouching)):
+            plain[name] = continuityRate(self._masses, p.velocities, i[pairs], j[pairs], self._kernelGradients[pairs],
+                                         p.nParticles)
+        plain['correction'] = rate - plain['continuityFluid'] - plain['continuityWall']
+        plain['diffusion'] = np.zeros_like(rate)
+
+        return plain
+
+    def _addKineticParts(self, startVelocities: np.ndarray, timeStep: float) -> None:
+
+        '''
+
+        Each part of the acceleration's work this step, sum_i m_i a_i . (v_i + v_i') / 2 dt over the
+        fluid, into the energy budget: the parts add up to the step's change of kinetic energy.
+
+        '''
+
+        p, energy = self._particles, self._energy
+        fluid = p.isFluid
+        masses = p.masses[fluid]
+        meanVelocities = 0.5 * (startVelocities + p.velocities[fluid])
+        for name, accelerations in self._accelerationParts.items():
+            energy[name] += timeStep * float(np.sum(masses * np.sum(accelerations[fluid] * meanVelocities, axis = 1)))
+        energy['gravityWork'] += timeStep * float(np.sum(masses * (meanVelocities @ np.asarray(self._config.gravity))))
+
+    def _addElasticParts(self, startDensities: np.ndarray, unfloored: np.ndarray, rateParts: dict,
+                         timeStep: float) -> None:
+
+        '''
+
+        Each part of the density rate's change of the fluid's elastic energy this step, over the
+        secant slope of e between the start and updated densities, and the floor's change after it,
+        into the energy budget.
+
+        '''
+
+        p, config, energy = self._particles, self._config, self._energy
+        fluid = p.isFluid
+        masses = p.masses[fluid]
+        rho0, c0, tension = config.referenceDensity, self._speedOfSound, config.negativePressure
+        slope = elasticSlope(startDensities, unfloored, rho0, c0, tension)
+        for name, part in rateParts.items():
+            energy[name] += timeStep * float(np.sum(masses * slope * part[fluid]))
+        energy['floor'] += float(np.sum(masses * (elasticEnergy(p.densities[fluid], rho0, c0, tension)
+                                                  - elasticEnergy(unfloored, rho0, c0, tension))))
+
+    def _fluidEnergy(self) -> float:
+
+        '''The fluid's kinetic, potential and elastic energy together [J], per unit depth [J/m] in 2D.'''
+
+        p = self._particles
+
+        return p.kineticEnergy() + p.potentialEnergy(self._gravity) + self.elasticEnergy
 
     def _shiftingSize(self, timeStep: float) -> float | np.ndarray:
 
@@ -1532,11 +1656,17 @@ class WcsphSolver:
 
         '''
 
-        p, config = self._particles, self._config
+        p, config, energy = self._particles, self._config, self._energy
+        if energy is not None and (self._compiled or self._gpu is not None):
+            raise ValueError('The energy budget runs on the numpy backend, or on the gpu backend through advance with '
+                             'a boundary the device can enforce.')
 
         self._updatePairs()
         if config.densityFilterInterval and self._step > 0 and self._step % config.densityFilterInterval == 0:
+            startEnergy = self.elasticEnergy if energy is not None else 0.0
             self._filterDensity()
+            if energy is not None:
+                energy['filter'] += self.elasticEnergy - startEnergy
         self._computeRates()
 
         fluidAccelerations = p.accelerations[p.isFluid]
@@ -1546,7 +1676,10 @@ class WcsphSolver:
 
         self._integrate(self._dt)
         if self._boundary is not None:
+            startEnergy = self._fluidEnergy() if energy is not None else 0.0
             self._boundary.enforce(p)
+            if energy is not None:
+                energy['clamp'] += self._fluidEnergy() - startEnergy
 
         self._time += self._dt
         self._step += 1
@@ -1599,6 +1732,9 @@ class WcsphSolver:
             gpu.residentIntegrate(self._dt)
             self._time += self._dt
             self._step += 1
+        if self._energy is not None:
+            for name, value in zip(deviceTerms, gpu.energySums()):
+                self._energy[name] += value
         gpu.pull(p)
 
         return self.currentState
@@ -1636,6 +1772,7 @@ class WcsphSolver:
         if config.particleShifting:
             raise ValueError('Particle shifting takes one smoothing length throughout.')
         before = p.nParticles
+        startEnergy = self._fluidEnergy() if self._energy is not None else 0.0
         count = splitParticles(p, mask, config.referenceDensity, config.smoothingLength, lengthRatio)
         if count == 0:
             return 0
@@ -1645,6 +1782,8 @@ class WcsphSolver:
             self._boundary._pistonMask = np.concatenate([pistonMask, np.zeros(p.nParticles - before, dtype = bool)])
         if self._boundary is not None:
             self._boundary.enforce(p)
+        if self._energy is not None:
+            self._energy['refinement'] += self._fluidEnergy() - startEnergy
         self._updatePairs()
 
         return count
@@ -1683,6 +1822,7 @@ class WcsphSolver:
             raise ValueError('The compiled backend takes one smoothing length throughout; merge on numpy or gpu.')
         if config.particleShifting:
             raise ValueError('Particle shifting takes one smoothing length throughout.')
+        startEnergy = self._fluidEnergy() if self._energy is not None else 0.0
         result = mergeParticles(p, mask, config.referenceDensity, referenceMass, config.smoothingLength, lengthRatio)
         if result.groups == 0:
             return result
@@ -1692,9 +1832,46 @@ class WcsphSolver:
             self._boundary._pistonMask = pistonMask[result.source]
         if self._boundary is not None:
             self._boundary.enforce(p)
+        if self._energy is not None:
+            self._energy['refinement'] += self._fluidEnergy() - startEnergy
         self._updatePairs()
 
         return result
+
+    def trackEnergy(self, enabled: bool = True) -> None:
+
+        '''
+
+        Start or stop the energy budget (`pysurf.sphEnergy`): from this call, every step adds to
+        each term the energy it moves into the fluid's kinetic, potential and elastic energy, read
+        through `energyBudget`. Starting resets every term to zero. The budget runs on the numpy
+        backend, and on the gpu backend through `advance` with a boundary the device can enforce;
+        there it takes 176 bytes of device memory a particle more.
+
+        Raises:
+        -------
+        ValueError : On the compiled backend.
+
+        '''
+
+        if enabled and self._compiled:
+            raise ValueError('The compiled backend has no energy budget; use the numpy or gpu backend.')
+        self._energy = zeroBudget() if enabled else None
+        if self._gpu is not None:
+            self._gpu.setEnergyBudget(enabled)
+
+    @property
+    def energyBudget(self) -> dict | None:
+        '''Each term's energy since `trackEnergy` [J], per unit depth [J/m] in 2D; None while the budget is off.'''
+        return dict(self._energy) if self._energy is not None else None
+
+    @property
+    def elasticEnergy(self) -> float:
+        '''The fluid's elastic energy, sum of m e(rho) (`sphEnergy.elasticEnergy`) [J], per unit depth [J/m] in 2D.'''
+        p, config = self._particles, self._config
+        fluid = p.isFluid
+        return float(np.sum(p.masses[fluid] * elasticEnergy(p.densities[fluid], config.referenceDensity,
+                                                            self._speedOfSound, config.negativePressure)))
 
     def restore(self, particles: ParticleSystem, time: float, step: int, timeStep: float) -> None:
 

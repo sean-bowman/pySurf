@@ -68,6 +68,9 @@ the sums the deltaSph scheme uses on clouds of mixed smoothing lengths; the bed 
 `HeightFieldBoundary.enforce` to 1e-12; a solver run on this backend against the compiled
 backend; the device-resident steps against the host steps in a tank and over a bed; and a still
 tank at rest. tests/testValidationGpuBackend.py repeats the CPU backends' validation cases on it.
+tests/testSphEnergy.py checks the device steps' energy budget against the change of the fluid's
+energy (closure), against the array solver's budget, and the device step against changing when the
+budget is on.
 
 Sean Bowman [11/05/2026]
 
@@ -84,6 +87,7 @@ import warp as wp
 
 # Local imports
 from pysurf.sphBoundaries import BedBoundary, ContainerBoundary, HeightFieldBoundary
+from pysurf.sphEnergy import deviceTerms, secantThreshold
 from pysurf.sphSolver import (antiClumpingPower, antiClumpingWeight, correctionFloor, freeSurfaceDivergence, freeSurfaceLopsidedness,
                               limiterCloseDistance, limiterFoldWidth, localShiftingCoefficient, surfaceGradient)
 
@@ -93,6 +97,7 @@ viscositySoftening = wp.constant(0.01)          # [-] as in sphSolver: mu_ij's d
 closeDistance = wp.constant(limiterCloseDistance)   # [-] of h_ij, where the limited viscosity's reconstruction fades
 foldWidth = wp.constant(limiterFoldWidth)           # [-] of h_ij, the fade's width
 candidateMargin = wp.constant(1.0001)           # [-] on r^2: float32 distances near 30 m are good to 1e-4 of a support
+elasticThreshold = wp.constant(wp.float64(secantThreshold))  # [-] of rho0, as in sphEnergy.elasticSlope
 taitExponent = 7.0                              # as in sphSolver
 maxGridCells = 2**25                            # cap on the hash grid's cells, 256 MB of cell ranges
 
@@ -106,6 +111,19 @@ layout = {'positions': wp.vec3d, 'velocities64': wp.vec3d, 'densities64': wp.flo
 shiftingLayout = {'gradients': wp.vec3, 'normals': wp.vec3, 'divergence': float, 'densityGradients': wp.vec3,
                   'shifts': wp.vec3, 'densityChanges': float, 'velocityChanges': wp.vec3}
 diffusionModes = {'none': 0, 'molteni': 1, 'hydrostatic': 2}
+
+def budgetLayout(capacity: int) -> dict:
+
+    '''
+
+    The energy budget's device arrays for `capacity` particles, 176 bytes a particle, made only for
+    a run that tracks it: each fluid particle's acceleration parts and density-rate parts of the
+    step, and its running total of each term in `sphEnergy.deviceTerms`.
+
+    '''
+
+    return {'accelerationParts': ((capacity, 4), wp.vec3), 'rateParts': ((capacity, 4), float),
+            'energies': ((capacity, len(deviceTerms)), wp.float64)}
 
 #----------------------------------------------------------------------#
 # -- Device Functions -- #
@@ -243,6 +261,38 @@ def normalization(unit: float, h: float, dims: int) -> float:
 # -- Pair Sums -- #
 #----------------------------------------------------------------------#
 
+@wp.func
+def elasticEnergy(density: wp.float64, referenceDensity: wp.float64, scale: wp.float64, tension: int) -> wp.float64:
+
+    '''`sphEnergy.elasticEnergy`, e(rho) per unit mass, with `scale` = c0^2 / 7.'''
+
+    x = density / referenceDensity - wp.float64(1.0)
+    polynomial = wp.float64(21.0) + x * (wp.float64(35.0) + x * (wp.float64(35.0) + x * (wp.float64(21.0)
+                                         + x * (wp.float64(7.0) + x))))
+    energy = scale * x * x * polynomial / (wp.float64(6.0) * (wp.float64(1.0) + x))
+    if tension == 0 and x < wp.float64(0.0):
+        energy = wp.float64(0.0)
+    return energy
+
+@wp.func
+def elasticSlope(before: wp.float64, after: wp.float64, referenceDensity: wp.float64, scale: wp.float64,
+                 tension: int) -> wp.float64:
+
+    '''`sphEnergy.elasticSlope`: the secant of e, or p / rho^2 at the midpoint for a change under 1e-10 rho0.'''
+
+    change = after - before
+    middle = wp.float64(0.5) * (before + after)
+    ratio = middle / referenceDensity
+    square = ratio * ratio
+    pressure = scale * referenceDensity * (square * square * square * ratio - wp.float64(1.0))
+    if tension == 0:
+        pressure = wp.max(pressure, wp.float64(0.0))
+    slope = pressure / (middle * middle)
+    if wp.abs(change) > elasticThreshold * referenceDensity:
+        slope = (elasticEnergy(after, referenceDensity, scale, tension)
+                 - elasticEnergy(before, referenceDensity, scale, tension)) / change
+    return slope
+
 @wp.kernel
 def accelerationKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
                        precise: int, period: float, kind: int, velocities: wp.array(dtype = wp.vec3),
@@ -250,14 +300,17 @@ def accelerationKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows:
                        masses: wp.array(dtype = float), fluid: wp.array(dtype = wp.uint8),
                        lengths: wp.array(dtype = float), maxLength: float, sigmaUnit: float, dims: int,
                        soundSpeed: float, alpha: float, boundaryFactor: float, gravity: wp.vec3,
-                       gradients: wp.array(dtype = wp.mat33), limited: int, result: wp.array(dtype = wp.vec3)):
+                       gradients: wp.array(dtype = wp.mat33), limited: int, result: wp.array(dtype = wp.vec3),
+                       budget: int, parts: wp.array2d(dtype = wp.vec3)):
 
     '''
 
     a_i = -sum_j m_j (p_i / rho_i^2 + p_j / rho_j^2 + Pi_ij) grad W_ij + g on the fluid, zero on the
     boundary, each pair at h_ij = (h_i + h_j) / 2. With `limited`, a fluid pair's Pi_ij takes its
     velocity difference less its linear part from the velocity `gradients`
-    (`sphSolver.limitedVelocityDifference`) and acts where both differences approach.
+    (`sphSolver.limitedVelocityDifference`) and acts where both differences approach. With `budget`,
+    each fluid particle's `parts` row takes its acceleration from the pressure and the viscosity of
+    fluid and of boundary neighbors, in `sphEnergy.deviceTerms` order, for the energy budget.
 
     '''
 
@@ -277,6 +330,10 @@ def accelerationKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows:
     if limited != 0:
         gradientI = gradients[i]
     total = wp.vec3(0.0, 0.0, 0.0)
+    pressureFluid = wp.vec3(0.0, 0.0, 0.0)
+    viscosityFluid = wp.vec3(0.0, 0.0, 0.0)
+    pressureWall = wp.vec3(0.0, 0.0, 0.0)
+    viscosityWall = wp.vec3(0.0, 0.0, 0.0)
     for image in range(imageCount(pointI, period, reach)):
         offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
         origin = pointI + offset
@@ -315,8 +372,23 @@ def accelerationKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows:
                 if fluid[j] == wp.uint8(0):
                     viscosity = viscosity * boundaryFactor
             coefficient = -(own + pressures[j] / (densityJ * densityJ) + viscosity) * masses[j]
-            total += coefficient * kernelSlope(r, h, normalization(sigmaUnit, h, dims), kind) / r * d
+            slope = kernelSlope(r, h, normalization(sigmaUnit, h, dims), kind)
+            total += coefficient * slope / r * d
+            if budget != 0:
+                pressurePart = -(own + pressures[j] / (densityJ * densityJ)) * masses[j] * slope / r * d
+                viscousPart = -viscosity * masses[j] * slope / r * d
+                if fluid[j] != wp.uint8(0):
+                    pressureFluid += pressurePart
+                    viscosityFluid += viscousPart
+                else:
+                    pressureWall += pressurePart
+                    viscosityWall += viscousPart
     result[i] = total + gravity
+    if budget != 0:
+        parts[i, 0] = pressureFluid
+        parts[i, 1] = viscosityFluid
+        parts[i, 2] = pressureWall
+        parts[i, 3] = viscosityWall
 
 @wp.func
 def hydrostaticDifference(vertical: float, meanDeviation: float, referenceDensity: float, gravityOverSound: float) -> float:
@@ -340,7 +412,7 @@ def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: w
                      diffusion: int, diffusionFactor: float, densities: wp.array(dtype = float),
                      deviations: wp.array(dtype = float), referenceDensity: float, gravityOverSound: float,
                      vertical: int, corrections: wp.array(dtype = wp.mat33), corrected: int,
-                     result: wp.array(dtype = float)):
+                     result: wp.array(dtype = float), budget: int, rateParts: wp.array2d(dtype = float)):
 
     '''
 
@@ -349,7 +421,9 @@ def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: w
     Molteni and Colagrossi's, 2 with the hydrostatic part subtracted. `diffusionFactor` is
     2 delta c0, which each pair takes times its h_ij; `deviations` are rho - rho0, so neighbors'
     differences keep their digits. With `corrected`, grad W_ij becomes L_i grad W_ij
-    (`correctionKernel`). Each pair is taken at h_ij = (h_i + h_j) / 2.
+    (`correctionKernel`). Each pair is taken at h_ij = (h_i + h_j) / 2. With `budget`, each fluid
+    particle's `rateParts` row takes the plain sum over fluid and over boundary neighbors, the
+    correction's part and the diffusion, for the energy budget.
 
     '''
 
@@ -368,7 +442,12 @@ def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: w
     correction = wp.identity(n = 3, dtype = float)
     if corrected != 0:
         correction = corrections[i]
+    tracked = budget != 0 and not boundaryI
     total = float(0.0)
+    continuity = float(0.0)
+    plainFluid = float(0.0)
+    plainWall = float(0.0)
+    diffusive = float(0.0)
     for image in range(imageCount(pointI, period, reach)):
         offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
         origin = pointI + offset
@@ -387,19 +466,39 @@ def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: w
             if r >= 2.0 * h or r < 1.0e-12:
                 continue
             slope = kernelSlope(r, h, normalization(sigmaUnit, h, dims), kind)
+            increment = float(0.0)
             if corrected != 0:
-                total += masses[j] * wp.dot(velocityI - velocities[j], correction * d) * slope / r
+                increment = masses[j] * wp.dot(velocityI - velocities[j], correction * d) * slope / r
             else:
-                total += masses[j] * wp.dot(velocityI - velocities[j], d) * slope / r
+                increment = masses[j] * wp.dot(velocityI - velocities[j], d) * slope / r
+            total += increment
+            if tracked:
+                continuity += increment
+                plain = masses[j] * wp.dot(velocityI - velocities[j], d) * slope / r
+                if fluid[j] != wp.uint8(0):
+                    plainFluid += plain
+                else:
+                    plainWall += plain
             if diffuses and fluid[j] != wp.uint8(0):
                 deviationJ = deviations[j]
                 difference = deviationJ - deviationI
                 if diffusion == 2:
                     difference -= hydrostaticDifference(d[vertical], 0.5 * (deviationI + deviationJ), referenceDensity,
                                                         gravityOverSound)
-                total += diffusionFactor * h * masses[j] / densities[j] * difference * (-slope * r) \
+                increment = diffusionFactor * h * masses[j] / densities[j] * difference * (-slope * r) \
                     / (r * r + viscositySoftening * h * h)
+                total += increment
+                if tracked:
+                    diffusive += increment
     result[i] = total
+    if tracked:
+        rateParts[i, 0] = plainFluid
+        rateParts[i, 1] = plainWall
+        corrective = float(0.0)
+        if corrected != 0:
+            corrective = continuity - plainFluid - plainWall
+        rateParts[i, 2] = corrective
+        rateParts[i, 3] = diffusive
 
 @wp.kernel
 def correctionKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
@@ -824,14 +923,21 @@ def toDeviation(densities: wp.array(dtype = wp.float64), referenceDensity: wp.fl
 
 @wp.kernel
 def applyShepard(filtered: wp.array(dtype = float), fluid: wp.array(dtype = wp.uint8),
-                 densities: wp.array(dtype = wp.float64), densities32: wp.array(dtype = float)):
+                 densities: wp.array(dtype = wp.float64), densities32: wp.array(dtype = float), budget: int,
+                 masses: wp.array(dtype = float), referenceDensity: wp.float64, scale: wp.float64, tension: int,
+                 energies: wp.array2d(dtype = wp.float64)):
 
-    '''The fluid takes its Shepard-filtered density; the boundary keeps its own.'''
+    '''The fluid takes its Shepard-filtered density; the boundary keeps its own. With `budget` the change of elastic energy goes to `energies`.'''
 
     i = wp.tid()
     if fluid[i] != wp.uint8(0):
+        before = densities[i]
         densities[i] = wp.float64(filtered[i])
         densities32[i] = filtered[i]
+        if budget != 0:
+            energies[i, 13] = energies[i, 13] + wp.float64(masses[i]) * (
+                elasticEnergy(densities[i], referenceDensity, scale, tension)
+                - elasticEnergy(before, referenceDensity, scale, tension))
 
 @wp.kernel
 def equationOfState(densities: wp.array(dtype = wp.float64), referenceDensity: wp.float64, stiffness: wp.float64,
@@ -861,72 +967,137 @@ def fluidMaxima(velocities: wp.array(dtype = wp.vec3d), accelerations: wp.array(
 
 @wp.kernel
 def kick(velocities: wp.array(dtype = wp.vec3d), accelerations: wp.array(dtype = wp.vec3),
-         fluid: wp.array(dtype = wp.uint8), timeStep: wp.float64, velocities32: wp.array(dtype = wp.vec3)):
+         fluid: wp.array(dtype = wp.uint8), timeStep: wp.float64, velocities32: wp.array(dtype = wp.vec3),
+         budget: int, parts: wp.array2d(dtype = wp.vec3), masses: wp.array(dtype = float), gravity: wp.vec3,
+         energies: wp.array2d(dtype = wp.float64)):
 
-    '''v += a dt on the fluid.'''
+    '''
+
+    v += a dt on the fluid. With `budget`, each part of a (`accelerationKernel`) and gravity add
+    their work m a . (v + v') / 2 dt to `energies`, columns 0 to 4.
+
+    '''
 
     i = wp.tid()
     velocity = velocities[i]
     if fluid[i] != wp.uint8(0):
+        start = velocity
         velocity = velocity + double(accelerations[i]) * timeStep
         velocities[i] = velocity
+        if budget != 0:
+            mean = wp.float64(0.5) * (start + velocity)
+            mass = wp.float64(masses[i])
+            for part in range(4):
+                energies[i, part] = energies[i, part] + mass * wp.dot(double(parts[i, part]), mean) * timeStep
+            energies[i, 4] = energies[i, 4] + mass * wp.dot(double(gravity), mean) * timeStep
     velocities32[i] = single(velocity)
 
 @wp.kernel
 def advanceDensity(densities: wp.array(dtype = wp.float64), rates: wp.array(dtype = float),
                    fluid: wp.array(dtype = wp.uint8), timeStep: wp.float64, floor: wp.float64,
-                   densities32: wp.array(dtype = float)):
+                   densities32: wp.array(dtype = float), budget: int, rateParts: wp.array2d(dtype = float),
+                   masses: wp.array(dtype = float), referenceDensity: wp.float64, scale: wp.float64, tension: int,
+                   energies: wp.array2d(dtype = wp.float64)):
 
-    '''rho += d rho / dt dt for every particle, the fluid's held at the floor when one is set.'''
+    '''
+
+    rho += d rho / dt dt for every particle, the fluid's held at the floor when one is set. With
+    `budget`, each part of the rate (`continuityKernel`) adds m e' d rho dt to `energies`, columns 5
+    to 8, e' the secant slope of the elastic energy over the step, and the floor its change, column 9.
+
+    '''
 
     i = wp.tid()
+    start = densities[i]
     density = densities[i] + wp.float64(rates[i]) * timeStep
+    unfloored = density
     if floor > wp.float64(0.0) and fluid[i] != wp.uint8(0):
         density = wp.max(density, floor)
     densities[i] = density
     densities32[i] = wp.float32(density)
+    if budget != 0 and fluid[i] != wp.uint8(0):
+        mass = wp.float64(masses[i])
+        slope = elasticSlope(start, unfloored, referenceDensity, scale, tension)
+        for part in range(4):
+            energies[i, 5 + part] = energies[i, 5 + part] + mass * slope * wp.float64(rateParts[i, part]) * timeStep
+        energies[i, 9] = energies[i, 9] + mass * (elasticEnergy(density, referenceDensity, scale, tension)
+                                                  - elasticEnergy(unfloored, referenceDensity, scale, tension))
 
 @wp.kernel
 def drift(positions: wp.array(dtype = wp.vec3d), transport: wp.array(dtype = wp.vec3),
           velocities: wp.array(dtype = wp.vec3d), useTransport: int, shifts: wp.array(dtype = wp.vec3),
           densityChanges: wp.array(dtype = float), velocityChanges: wp.array(dtype = wp.vec3), useShifts: int,
           densities: wp.array(dtype = wp.float64), fluid: wp.array(dtype = wp.uint8), timeStep: wp.float64,
-          period: wp.float64):
+          period: wp.float64, budget: int, masses: wp.array(dtype = float), gravity: wp.vec3d,
+          referenceDensity: wp.float64, scale: wp.float64, tension: int, energies: wp.array2d(dtype = wp.float64)):
 
     '''
 
     x += u dt on the fluid, u the XSPH transport velocity or the velocity, plus the shift and its
-    density and velocity changes when shifting; y wrapped onto the period.
+    density and velocity changes when shifting; y wrapped onto the period. With `budget`, the
+    drift's change of potential energy goes to `energies` column 10, and the shift's change of
+    kinetic, potential and elastic energy to column 12.
 
     '''
 
     i = wp.tid()
     if fluid[i] == wp.uint8(0):
         return
+    mass = wp.float64(masses[i])
     velocity = velocities[i]
     if useTransport != 0:
         velocity = double(transport[i])
+    start = positions[i]
     x = positions[i] + velocity * timeStep
+    if budget != 0:
+        # From the displacement as stored, not v dt again: a shared v dt would stop the position's fused multiply-add
+        energies[i, 10] = energies[i, 10] - mass * wp.dot(gravity, x - start)
     if useShifts != 0:
-        x = x + double(shifts[i])
+        startDensity = densities[i]
+        startVelocity = velocities[i]
+        shift = double(shifts[i])
+        x = x + shift
         densities[i] = densities[i] + wp.float64(densityChanges[i])
         velocities[i] = velocities[i] + double(velocityChanges[i])
+        if budget != 0:
+            endVelocity = velocities[i]
+            energies[i, 12] = energies[i, 12] + mass * (
+                wp.float64(0.5) * (wp.dot(endVelocity, endVelocity) - wp.dot(startVelocity, startVelocity))
+                + elasticEnergy(densities[i], referenceDensity, scale, tension)
+                - elasticEnergy(startDensity, referenceDensity, scale, tension) - wp.dot(gravity, shift))
     if period > wp.float64(0.0):
         x = wp.vec3d(x[0], x[1] - period * wp.floor(x[1] / period), x[2])
     positions[i] = x
 
+@wp.func
+def clampEnergy(mass: wp.float64, startPosition: wp.vec3d, startVelocity: wp.vec3d, position: wp.vec3d,
+                velocity: wp.vec3d, gravity: wp.vec3d) -> wp.float64:
+
+    '''The change of kinetic and potential energy a boundary's enforcement makes to one particle [J].'''
+
+    return mass * (wp.float64(0.5) * (wp.dot(velocity, velocity) - wp.dot(startVelocity, startVelocity))
+                   - wp.dot(gravity, position - startPosition))
+
 @wp.kernel
 def enforceContainer(positions: wp.array(dtype = wp.vec3d), velocities: wp.array(dtype = wp.vec3d),
                      fluid: wp.array(dtype = wp.uint8), lower: wp.vec3d, upper: wp.vec3d, dimensions: int,
-                     openTop: int):
+                     openTop: int, budget: int, masses: wp.array(dtype = float), gravity: wp.vec3d,
+                     energies: wp.array2d(dtype = wp.float64)):
 
-    '''`ContainerBoundary.enforce`: fluid outside the box returns to its face, with no velocity through it.'''
+    '''
+
+    `ContainerBoundary.enforce`: fluid outside the box returns to its face, with no velocity through
+    it. With `budget` the change of energy goes to `energies` column 11.
+
+    '''
 
     i = wp.tid()
     if fluid[i] == wp.uint8(0):
         return
     x = positions[i]
     v = velocities[i]
+    startPosition = positions[i]
+    startVelocity = velocities[i]
     zero = wp.float64(0.0)
     for axis in range(dimensions):
         if x[axis] < lower[axis]:
@@ -938,6 +1109,8 @@ def enforceContainer(positions: wp.array(dtype = wp.vec3d), velocities: wp.array
                 v[axis] = wp.min(v[axis], zero)
     positions[i] = x
     velocities[i] = v
+    if budget != 0:
+        energies[i, 11] = energies[i, 11] + clampEnergy(wp.float64(masses[i]), startPosition, startVelocity, x, v, gravity)
 
 @wp.func
 def bedSegment(x: wp.float64, bedX: wp.array(dtype = wp.float64)) -> int:
@@ -959,12 +1132,14 @@ def enforceBed(positions: wp.array(dtype = wp.vec3d), velocities: wp.array(dtype
                fluid: wp.array(dtype = wp.uint8), bedX: wp.array(dtype = wp.float64),
                bedZ: wp.array(dtype = wp.float64), vertical: int, clearance: wp.float64, sideWalls: int,
                width: wp.float64, offshoreWall: int, wallX: wp.float64, pistonSpeed: wp.float64,
-               endLimit: wp.float64):
+               endLimit: wp.float64, budget: int, masses: wp.array(dtype = float), gravity: wp.vec3d,
+               energies: wp.array2d(dtype = wp.float64)):
 
     '''
 
     `BedBoundary.enforce`: fluid below the bed returns to a quarter spacing above it with no
     velocity into it; fluid past a side wall, the offshore wall or the shoreward end returns to it.
+    With `budget` the change of energy goes to `energies` column 11.
 
     '''
 
@@ -973,6 +1148,8 @@ def enforceBed(positions: wp.array(dtype = wp.vec3d), velocities: wp.array(dtype
         return
     x = positions[i]
     v = velocities[i]
+    startPosition = positions[i]
+    startVelocity = velocities[i]
     zero = wp.float64(0.0)
     one = wp.float64(1.0)
 
@@ -1013,6 +1190,8 @@ def enforceBed(positions: wp.array(dtype = wp.vec3d), velocities: wp.array(dtype
 
     positions[i] = x
     velocities[i] = v
+    if budget != 0:
+        energies[i, 11] = energies[i, 11] + clampEnergy(wp.float64(masses[i]), startPosition, startVelocity, x, v, gravity)
 
 @wp.func
 def convolutionWeights(u: wp.float64) -> wp.vec4d:
@@ -1038,12 +1217,15 @@ def convolutionSlopeWeights(u: wp.float64) -> wp.vec4d:
 def enforceHeightField(positions: wp.array(dtype = wp.vec3d), velocities: wp.array(dtype = wp.vec3d),
                        fluid: wp.array(dtype = wp.uint8), table: wp.array2d(dtype = wp.float64), originX: wp.float64,
                        originY: wp.float64, stepX: wp.float64, stepY: wp.float64, clearance: wp.float64,
-                       lowY: wp.float64, highY: wp.float64, offshoreWall: int, lowX: wp.float64, highX: wp.float64):
+                       lowY: wp.float64, highY: wp.float64, offshoreWall: int, lowX: wp.float64, highX: wp.float64,
+                       budget: int, masses: wp.array(dtype = float), gravity: wp.vec3d,
+                       energies: wp.array2d(dtype = wp.float64)):
 
     '''
 
     `HeightFieldBoundary.enforce`: fluid below the bed rises to a quarter spacing above it and
-    loses its velocity into it along the bed's normal; fluid past a wall returns to it.
+    loses its velocity into it along the bed's normal; fluid past a wall returns to it. With
+    `budget` the change of energy goes to `energies` column 11.
 
     '''
 
@@ -1052,6 +1234,8 @@ def enforceHeightField(positions: wp.array(dtype = wp.vec3d), velocities: wp.arr
         return
     x = positions[i]
     v = velocities[i]
+    startPosition = positions[i]
+    startVelocity = velocities[i]
     zero = wp.float64(0.0)
     one = wp.float64(1.0)
 
@@ -1115,6 +1299,8 @@ def enforceHeightField(positions: wp.array(dtype = wp.vec3d), velocities: wp.arr
 
     positions[i] = x
     velocities[i] = v
+    if budget != 0:
+        energies[i, 11] = energies[i, 11] + clampEnergy(wp.float64(masses[i]), startPosition, startVelocity, x, v, gravity)
 
 #----------------------------------------------------------------------#
 # -- Host Interface -- #
@@ -1252,7 +1438,11 @@ class PairSums:
         self.negativePressure = False
         self.correctContinuity = False
         self.limitViscosity = False
+        self.trackEnergy = False
         self._noCorrections = wp.zeros(1, dtype = wp.mat33, device = self.device)
+        # Stand-ins for the energy budget's arrays while it is off
+        self._noBudget = {name: wp.zeros(shape, dtype = dtype, device = self.device)
+                          for name, (shape, dtype) in budgetLayout(1).items()}
         self._enforcement: tuple | None = None
         self._capacity = 0
         self._device: dict[str, wp.array] = {}
@@ -1273,6 +1463,9 @@ class PairSums:
         if self.limitViscosity:
             fields['gradients'] = wp.mat33
         self._device = {name: wp.zeros(capacity, dtype = dtype, device = self.device) for name, dtype in fields.items()}
+        if self.trackEnergy:
+            self._device.update({name: wp.zeros(shape, dtype = dtype, device = self.device)
+                                 for name, (shape, dtype) in budgetLayout(capacity).items()})
         self._staging = {}
         self._capacity = capacity
 
@@ -1380,6 +1573,53 @@ class PairSums:
         self.limitViscosity = bool(enabled)
         if enabled and self._capacity and 'gradients' not in self._device:
             self._device['gradients'] = wp.zeros(self._capacity, dtype = wp.mat33, device = self.device)
+
+    def setEnergyBudget(self, enabled: bool) -> None:
+
+        '''
+
+        Whether the device steps keep the energy budget (`pysurf.sphEnergy`): each fluid particle's
+        running total of every term in `sphEnergy.deviceTerms`, from `push` to `energySums`.
+
+        '''
+
+        self.trackEnergy = bool(enabled)
+        if enabled and self._capacity and 'energies' not in self._device:
+            for name, (shape, dtype) in budgetLayout(self._capacity).items():
+                self._device[name] = wp.zeros(shape, dtype = dtype, device = self.device)
+
+    @property
+    def _budget(self) -> dict:
+        '''The energy budget's arrays, or their stand-ins while it is off.'''
+        return self._device if self.trackEnergy else self._noBudget
+
+    @property
+    def _energyInputs(self) -> list:
+        '''The elastic energy's arguments: rho0, c0^2 / 7 and whether the fluid carries tension.'''
+        physics = self.physics
+        return [physics['referenceDensity'], physics['stiffness'] / physics['referenceDensity'], int(self.negativePressure)]
+
+    def energySums(self) -> np.ndarray:
+
+        '''
+
+        Each term's energy over the device steps since `push` [J], summed over the particles, in
+        `sphEnergy.deviceTerms` order.
+
+        Raises:
+        -------
+        ValueError : While the budget is off.
+
+        '''
+
+        if not self.trackEnergy:
+            raise ValueError('The energy budget is off; see setEnergyBudget.')
+        if self.count == 0:
+            return np.zeros(len(deviceTerms))
+        # Summed down each column; Warp keeps the summed axis, as a row
+        sums = wp.utils.array_sum(self._device['energies'][:self.count], axis = 0)
+
+        return np.asarray(sums.numpy(), dtype = float).ravel()
 
     def velocityGradients(self, velocities: np.ndarray, densities: np.ndarray) -> np.ndarray:
 
@@ -1581,7 +1821,7 @@ class PairSums:
             self._velocityGradients()
         self._launch(accelerationKernel, self._geometry + uploaded + [self._device['masses'], self._device['fluid']]
                      + self._lengthInputs + [soundSpeed, alpha, boundaryViscosityFactor, wp.vec3(*g)]
-                     + self._viscosityInputs + [self._device['vector']])
+                     + self._viscosityInputs + [self._device['vector'], 0, self._noBudget['accelerationParts']])
 
         return self._download('vector')
 
@@ -1598,7 +1838,7 @@ class PairSums:
             self._correct()
         self._launch(continuityKernel, self._geometry + [
             self._upload('velocities', velocities), self._device['masses'], self._device['fluid']]
-            + self._lengthInputs + self._diffusionInputs + [self._device['scalar']])
+            + self._lengthInputs + self._diffusionInputs + [self._device['scalar'], 0, self._noBudget['rateParts']])
 
         return self._download('scalar')
 
@@ -1660,6 +1900,10 @@ class PairSums:
         '''
 
         d = self._device
+        # The energy budget's arguments, which every enforcement takes last
+        g = np.zeros(3)
+        g[:self.dimensions] = self.physics['gravity64'] if self.physics else 0.0
+        budget = [int(self.trackEnergy), d['masses'], wp.vec3d(*g), self._budget['energies']]
         if boundary is None:
             self._enforcement = None
         elif isinstance(boundary, ContainerBoundary):
@@ -1668,7 +1912,7 @@ class PairSums:
             upper[:self.dimensions] = boundary.containerMax
             self._enforcement = (enforceContainer, [d['positions'], d['velocities64'], d['fluid'], wp.vec3d(*lower),
                                                     wp.vec3d(*upper), boundary.dimensions,
-                                                    1 if boundary.openTop else 0])
+                                                    1 if boundary.openTop else 0] + budget)
         elif isinstance(boundary, BedBoundary):
             bed, clearance = boundary.bathymetry, 0.25 * boundary.spacing
             mask = boundary._pistonMask
@@ -1679,7 +1923,7 @@ class PairSums:
                 d['positions'], d['velocities64'], d['fluid'], wp.array(bed.x, dtype = wp.float64, device = self.device),
                 wp.array(bed.z, dtype = wp.float64, device = self.device), self.dimensions - 1, clearance,
                 1 if sideWalls else 0, float(boundary.width or 0.0), 1 if boundary.wallTop is not None else 0,
-                float(boundary.wallX), pistonSpeed, float(endLimit)])
+                float(boundary.wallX), pistonSpeed, float(endLimit)] + budget)
         elif isinstance(boundary, HeightFieldBoundary):
             field, clearance = boundary.field, 0.25 * boundary.spacing
             startX, endX, startY, endY = field.bounds
@@ -1687,7 +1931,7 @@ class PairSums:
                 d['positions'], d['velocities64'], d['fluid'], wp.array(field.z, dtype = wp.float64, device = self.device),
                 float(field.x[0]), float(field.y[0]), field.spacingX, field.spacingY, clearance, startY + clearance,
                 endY - clearance, 1 if boundary.offshoreWall else 0, startX + clearance,
-                endX - clearance if boundary.endWall else endX])
+                endX - clearance if boundary.endWall else endX] + budget)
         else:
             raise ValueError(f'The device cannot enforce a {type(boundary).__name__}; step from the host.')
 
@@ -1722,7 +1966,8 @@ class PairSums:
         self.physics = {'referenceDensity': float(referenceDensity), 'soundSpeed': float(soundSpeed),
                         'stiffness': float(referenceDensity * soundSpeed**2 / taitExponent), 'alpha': float(alpha),
                         'boundaryViscosityFactor': float(boundaryViscosityFactor), 'gravity': wp.vec3(*g),
-                        'xsphEpsilon': float(xsphEpsilon), 'densityFloor': float(densityFloor)}
+                        'gravity64': np.asarray(gravity, dtype = float), 'xsphEpsilon': float(xsphEpsilon),
+                        'densityFloor': float(densityFloor)}
 
     def push(self, particles) -> None:
 
@@ -1736,6 +1981,8 @@ class PairSums:
                 count = self.count)
         wp.copy(d['densities64'], wp.array(np.asarray(particles.densities, dtype = float), dtype = wp.float64,
                                            device = 'cpu'), count = self.count)
+        if self.trackEnergy:
+            d['energies'].zero_()
         wp.synchronize_device(self.device)
 
     def pull(self, particles) -> None:
@@ -1765,13 +2012,14 @@ class PairSums:
 
         '''
 
-        d, physics = self._device, self.physics
+        d, physics, budget = self._device, self.physics, self._budget
         self._rebuild()
         self._launch(toSingle, [d['velocities64'], d['densities64'], d['velocities'], d['densities']])
         if filterDensity:
             self._launch(shepardKernel, self._geometry + [d['densities'], d['masses']] + self._lengthInputs
                          + [d['scalar']])
-            self._launch(applyShepard, [d['scalar'], d['fluid'], d['densities64'], d['densities']])
+            self._launch(applyShepard, [d['scalar'], d['fluid'], d['densities64'], d['densities'], int(self.trackEnergy),
+                                        d['masses']] + self._energyInputs + [budget['energies']])
         self._launch(equationOfState, [d['densities64'], physics['referenceDensity'], physics['stiffness'], d['fluid'],
                                        int(self.negativePressure), d['pressures']])
         if self.extrapolateWalls:
@@ -1783,7 +2031,7 @@ class PairSums:
         self._launch(accelerationKernel, self._geometry + [d['velocities'], d['densities'], d['pressures'], d['masses'],
                                                            d['fluid']] + self._lengthInputs + [
             physics['soundSpeed'], physics['alpha'], physics['boundaryViscosityFactor'], physics['gravity']]
-                     + self._viscosityInputs + [d['accelerations']])
+                     + self._viscosityInputs + [d['accelerations'], int(self.trackEnergy), budget['accelerationParts']])
         self._maxima.zero_()
         self._launch(fluidMaxima, [d['velocities64'], d['accelerations'], d['fluid'], self._maxima])
         maxima = self._maxima.numpy()
@@ -1800,17 +2048,22 @@ class PairSums:
 
         '''
 
-        d, physics = self._device, self.physics
+        d, physics, budget = self._device, self.physics, self._budget
+        tracked = int(self.trackEnergy)
         epsilon = physics['xsphEpsilon']
-        self._launch(kick, [d['velocities64'], d['accelerations'], d['fluid'], timeStep, d['velocities']])
+        g = np.zeros(3)
+        g[:self.dimensions] = physics['gravity64']
+        self._launch(kick, [d['velocities64'], d['accelerations'], d['fluid'], timeStep, d['velocities'], tracked,
+                            budget['accelerationParts'], d['masses'], physics['gravity'], budget['energies']])
         if self.diffusion['mode'] != 0:
             self._launch(toDeviation, [d['densities64'], self.diffusion['referenceDensity'], d['deviations']])
         if self.correctContinuity:
             self._correct()
         self._launch(continuityKernel, self._geometry + [d['velocities'], d['masses'], d['fluid']] + self._lengthInputs
-                     + self._diffusionInputs + [d['scalar']])
+                     + self._diffusionInputs + [d['scalar'], tracked, budget['rateParts']])
         self._launch(advanceDensity, [d['densities64'], d['scalar'], d['fluid'], timeStep, physics['densityFloor'],
-                                      d['densities']])
+                                      d['densities'], tracked, budget['rateParts'], d['masses']] + self._energyInputs
+                     + [budget['energies']])
         if epsilon > 0.0:
             self._launch(xsphKernel, self._geometry + [d['velocities'], d['densities'], d['masses'], d['fluid']]
                          + self._lengthInputs + [epsilon, d['vector']])
@@ -1821,7 +2074,8 @@ class PairSums:
         self._launch(drift, [d['positions'], d['vector'], d['velocities64'], 1 if epsilon > 0.0 else 0,
                              d['shifts'] if shifting else d['vector'], d['densityChanges'] if shifting else d['scalar'],
                              d['velocityChanges'] if shifting else d['vector'], 1 if shifting else 0,
-                             d['densities64'], d['fluid'], timeStep, self.period])
+                             d['densities64'], d['fluid'], timeStep, self.period, tracked, d['masses'],
+                             wp.vec3d(*g)] + self._energyInputs + [budget['energies']])
         self.enforceBoundary()
 
     def enforceBoundary(self) -> None:

@@ -423,6 +423,7 @@ python -m pysurf.WaterSim   # Run default sloshing tank
 | `sphParticles` | Particle state, energy diagnostics, lattice seeding and region fills, columns fitted to a bed, particles added mid-run |
 | `sphBoundaries` | Container and bed boundaries of fixed particles, with enforcement; beds extruded across a walled or periodic 3D channel, or sheared across it with a piston per particle row; a height-field bed in a walled tank, enforced on the GPU |
 | `sphSolver` | Tait equation of state, continuity density, Shepard filter or δ-SPH density diffusion, the kernel gradient correction, wall pressure from the water, artificial viscosity (plain or limited), XSPH, CFL step, and the solver that composes them; a periodic spanwise axis |
+| `sphEnergy` | The energy budget of the SPH step: what the pressure, viscosity, gravity, continuity sum and its correction, diffusion, walls and floor each move into the fluid's kinetic, potential and elastic energy, closing on their change to rounding (`WcsphSolver.trackEnergy`) |
 | `sphCompiled` | The solver's per-step sums compiled with numba and run across threads over a cell-linked neighbor list, for 3D runs (`backend = 'compiled'`) |
 | `sphGpu` | The same sums on a GPU through NVIDIA Warp, and the whole time step on the device for `advance` (`backend = 'gpu'`): float32 pair arithmetic, float64 state |
 | `sphFrames` | An SPH run's frames streamed to disk, one `.npz` file each with an index, for runs whose frames do not fit in memory |
@@ -497,6 +498,7 @@ repo_root/
         ├── sphParticles.py          Particle state and seeding
         ├── sphBoundaries.py         Container and bed boundaries
         ├── sphSolver.py             WCSPH equations and time stepping
+        ├── sphEnergy.py             The energy budget of the SPH step
         ├── sphCompiled.py           The SPH sums compiled with numba, across threads
         ├── sphGpu.py                The SPH sums and time step on a GPU (NVIDIA Warp)
         ├── sphFrames.py             SPH frames streamed to disk

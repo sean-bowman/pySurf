@@ -206,6 +206,7 @@ from pysurf.bathymetry import Bathymetry
 from pysurf.bemSolver import FlowField, JetGeometry, jetGeometry
 from pysurf.errors import InvalidInputError, NumericalInstabilityError
 from pysurf.sphBoundaries import BedBoundary
+from pysurf.sphEnergy import budgetGroups, energyTerms
 from pysurf.sphHandoff import boundaryPressure, clearSurface, seedStillWater, seedWater
 from pysurf.sphPacking import PackingResult, packPoints
 from pysurf.sphParticles import ParticleSystem
@@ -338,6 +339,10 @@ class WaveFrame:
         Fluid particle speeds [m/s]
     kineticEnergy, potentialEnergy : float
         Fluid energies per unit crest width [J/m]
+    elasticEnergy : float
+        The fluid's elastic energy per unit crest width [J/m], with the energy budget on; NaN without
+    budget : dict | None
+        Each energy budget term since the start [J/m] (`pysurf.sphEnergy`); None without the budget
 
     '''
 
@@ -346,6 +351,8 @@ class WaveFrame:
     speeds: np.ndarray
     kineticEnergy: float
     potentialEnergy: float
+    elasticEnergy: float = float('nan')
+    budget: dict | None = None
 
 class BreakingWave:
 
@@ -439,6 +446,9 @@ class BreakingWave:
         For the 'deltaSph' scheme, the arc the face slope is read over, in spacings
         (`waveBreaking.contourFace`); None for 2 when the start lies on its lattice and 6, the
         kernel's support, when it is jittered, whose surface is rough at the particles' scale
+    energyBudget : bool
+        Keep the solver's energy budget from the start (`WcsphSolver.trackEnergy`), recorded with
+        each frame, for `breakingBudget`. Not on the compiled backend
 
     '''
 
@@ -450,7 +460,7 @@ class BreakingWave:
                  solverOptions: dict | None = None, bathymetry: Bathymetry | None = None,
                  startX: float | None = None, startingWave: str = 'exact', refinement: dict | None = None,
                  bedFitted: bool | None = None, startJitter: float | None = None, startSeed: int = 1,
-                 faceArc: float | None = None, startPacking: bool | None = None) -> None:
+                 faceArc: float | None = None, startPacking: bool | None = None, energyBudget: bool = False) -> None:
 
         self.depth = depth                          # [m]
         self.waveHeight = waveHeight                # [m]
@@ -475,6 +485,7 @@ class BreakingWave:
         self.startPacking = bool(startPacking) if startPacking is not None else defaultPacking.get(scheme, False)
         self.faceArc = float(faceArc if faceArc is not None
                              else jitteredFaceArc if self.startJitter > 0.0 else latticeFaceArc)
+        self.energyBudget = bool(energyBudget)
 
         # Speed of sound as a multiple of the solitary wave celerity, and simulated time between
         # breaking checks in units of sqrt(d / g)
@@ -731,6 +742,8 @@ class BreakingWave:
         # A lean offshore of the toe would be start-up noise, never breaking
         self.tracker = BreakingTracker(self.bathymetry, s, faceReach = d, searchFromX = self.toeX,
                                        faceMeasure = 'contour' if exact else 'cells', faceArc = self.faceArc)
+        if self.energyBudget:
+            self.solver.trackEnergy()
         self.frames = []
         self._recordFrame()
 
@@ -800,10 +813,14 @@ class BreakingWave:
         '''Store the fluid at the current instant.'''
 
         p, fluid = self.particles, self.particles.isFluid
-        state = self.solver.currentState
-        self.frames.append(WaveFrame(time = self.solver.time, positions = p.positions[fluid].copy(),
+        solver = self.solver
+        state = solver.currentState
+        budget = solver.energyBudget
+        self.frames.append(WaveFrame(time = solver.time, positions = p.positions[fluid].copy(),
                                      speeds = np.linalg.norm(p.velocities[fluid], axis = 1),
-                                     kineticEnergy = state.kineticEnergy, potentialEnergy = state.potentialEnergy))
+                                     kineticEnergy = state.kineticEnergy, potentialEnergy = state.potentialEnergy,
+                                     elasticEnergy = solver.elasticEnergy if budget is not None else float('nan'),
+                                     budget = budget))
 
     def run(self, endTime: float | None = None, progress: bool = True, stopAt: str = 'end') -> None:
 
@@ -1164,6 +1181,83 @@ class BreakingWave:
             'breakingFaceDepthOverDepth': point.faceDepth / d,
             'activeEndReached': reached,
         }
+
+    def budgetHistory(self) -> tuple[np.ndarray, dict, np.ndarray]:
+
+        '''
+
+        The energy budget at each recorded frame (`energyBudget`).
+
+        Returns:
+        --------
+        tuple : the frame times [s]; each term's energy since the start, by name (`sphEnergy.energyTerms`)
+            [J/m]; and the fluid's elastic energy [J/m]
+
+        Raises:
+        -------
+        ValueError : If the run kept no energy budget.
+
+        '''
+
+        if not self.frames or self.frames[0].budget is None:
+            raise ValueError('The run kept no energy budget; build it with energyBudget = True.')
+        times = np.array([frame.time for frame in self.frames])
+        terms = {name: np.array([frame.budget[name] for frame in self.frames]) for name in energyTerms}
+        elastic = np.array([frame.elasticEnergy for frame in self.frames])
+
+        return times, terms, elastic
+
+    def breakingBudget(self, reference: BreakingWave | None = None) -> dict:
+
+        '''
+
+        The energy budget over active breaking, from `breakingDissipation`'s t1 to t2: what each
+        term added to the fluid's kinetic, potential and elastic energy, and each group
+        (`sphEnergy.budgetGroups`), with the still reference's terms over the same interval taken
+        out, as `energyHistory` takes out its drift. Each group's share of the mechanical energy
+        lost is its energy removed over that loss, and the elastic energy's change takes the rest:
+        the shares sum to one. The closure, the terms' total less the change of K + P + E_C over the
+        interval, is zero to rounding when the reference's frames fall at the same times.
+
+        Parameters:
+        -----------
+        reference : BreakingWave | None
+            The still water run of the same tank, kept with the budget too
+
+        Returns:
+        --------
+        dict : t1 and t2 [s]; each term and each group [J/m]; the mechanical and elastic energy's
+            changes [J/m]; the closure [J/m]; and each group's share of the mechanical loss
+
+        Raises:
+        -------
+        ValueError : If the wave has not broken, or a run kept no energy budget.
+
+        '''
+
+        dissipation = self.breakingDissipation(reference)
+        start, end = dissipation['breakingTime'], dissipation['activeEndTime']
+
+        def change(wave: BreakingWave) -> tuple[dict, float]:
+            times, terms, elastic = wave.budgetHistory()
+            return ({name: float(np.interp(end, times, series) - np.interp(start, times, series))
+                     for name, series in terms.items()},
+                    float(np.interp(end, times, elastic) - np.interp(start, times, elastic)))
+
+        terms, elasticChange = change(self)
+        if reference is not None:
+            referenceTerms, referenceElastic = change(reference)
+            terms = {name: terms[name] - referenceTerms[name] for name in terms}
+            elasticChange -= referenceElastic
+        groups = budgetGroups(terms)
+        mechanicalChange = dissipation['activeEndEnergy'] - dissipation['breakingEnergy']
+        lost = -mechanicalChange
+        shares = {name: -value / lost for name, value in groups.items() if name != 'total'}
+        shares['elastic'] = elasticChange / lost
+
+        return {'breakingTime': start, 'activeEndTime': end, 'terms': terms, 'groups': groups,
+                'mechanicalChange': mechanicalChange, 'elasticChange': elasticChange,
+                'closure': groups['total'] - (mechanicalChange + elasticChange), 'shareOfLoss': shares}
 
     def drawFrame(self, index: int = -1):
 
