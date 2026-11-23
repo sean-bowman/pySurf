@@ -8,7 +8,9 @@ Checks of pysurf.waveMakers against closed forms.
 The piston stroke comes from the Biesel transfer function, which reduces to H/S = kd in shallow
 water and H/S = 2 in deep water; the stroke is checked against both, and the wavenumber against
 the dispersion relation. The paddle's displacement and velocity are checked against each other by
-central difference once the ramp is complete.
+central difference once the ramp is complete. The second-order stroke is checked against the
+condition it exists to meet: through the transfer function at 2 omega, its motion radiates a free
+wave equal and opposite to the free second harmonic of Madsen's (1971) eq. 26.
 
 The solitary initial condition is checked against its definition: the particles fill the profile to
 within the lattice spacing, their count carries the still water plus the wave volume 2 H / kappa,
@@ -77,6 +79,52 @@ def testThePaddleVelocityIsTheDerivativeOfItsDisplacement(secondOrder):
     for time in (1.6, 2.1, 2.9):
         derivative = (piston.getDisplacement(time + dt) - piston.getDisplacement(time - dt)) / (2.0 * dt)
         assert piston.getVelocity(time) == pytest.approx(derivative, rel = 1e-6, abs = 1e-9)
+
+@pytest.mark.parametrize('wavePeriod', [3.0, 2.0, 1.5, 1.0])
+def testTheSecondOrderStrokeCancelsTheFreeSecondHarmonic(wavePeriod):
+
+    '''
+
+    Madsen (1971): a paddle moving as -xi0 cos(omega t) sheds the free wave
+    a_L cos(kappa x - 2 omega t), with omega^2 = g k tanh kd, 4 omega^2 = g kappa tanh kappa d and
+
+        a_L = (a^2 / 2) (coth kd / d) (3 / (4 sinh^2 kd) - n1 / 2) tanh(kappa d) / n2    (eq. 26)
+
+    By linear theory a motion A sin(2 omega t) radiates A T cos(kappa x - 2 omega t), T the
+    transfer function at kappa d, so the two cancel when A = -a_L / T. A quarter period on, with the
+    first harmonic at +(S / 2) sin(omega t), that motion is +(a_L / T) sin(2 omega t): S2 / 2 = a_L / T.
+    The periods take kd from 0.49 to 2.08, across the change of sign at kd = 1.157.
+
+    '''
+
+    waveHeight, waterDepth = 0.04, 0.5
+    piston = pistonFor(waveHeight, wavePeriod, waterDepth, rampCycles = 0)
+    omega = 2.0 * math.pi / wavePeriod
+    kd = piston.wavenumber * waterDepth
+    kappaD = float(waveTheory.dispersionWavenumber(2.0 * omega, waterDepth)) * waterDepth
+    n1 = 0.5 * (1.0 + 2.0 * kd / math.sinh(2.0 * kd))
+    n2 = 0.5 * (1.0 + 2.0 * kappaD / math.sinh(2.0 * kappaD))
+    amplitude = 0.5 * waveHeight
+    freeWave = (0.5 * amplitude**2 / (math.tanh(kd) * waterDepth) * (0.75 / math.sinh(kd)**2 - 0.5 * n1)
+                * math.tanh(kappaD) / n2)
+    transfer = math.tanh(kappaD) / n2
+
+    assert float(waveTheory.pistonTransferFunction(kappaD)) == pytest.approx(transfer, rel = 1e-12)
+    assert 0.5 * piston.secondOrderStroke * transfer == pytest.approx(freeWave, rel = 1e-10)
+    assert (piston.secondOrderStroke < 0.0) == (kd > 1.157)
+
+    # The paddle moves with both harmonics, whatever the second's sign
+    for time in (0.3, 0.7):
+        phase = omega * time
+        expected = 0.5 * piston.stroke * math.sin(phase) + 0.5 * piston.secondOrderStroke * math.sin(2.0 * phase)
+        assert piston.getDisplacement(time) == pytest.approx(expected, rel = 1e-12)
+
+def testTheSecondOrderStrokeIsOffOnRequest():
+
+    piston = pistonFor(0.04, 1.0, 0.5, rampCycles = 0, useSecondOrder = False)
+
+    assert piston.secondOrderStroke == 0.0
+    assert piston.getDisplacement(0.2) == pytest.approx(0.5 * piston.stroke * math.sin(2.0 * math.pi * 0.2), rel = 1e-12)
 
 def testTheRampStartsThePaddleAtRest():
 

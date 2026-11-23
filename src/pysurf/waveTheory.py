@@ -25,7 +25,8 @@ References:
 -----------
 Dean, R.G. & Dalrymple, R.A. (1991) -- Water Wave Mechanics for Engineers and Scientists,
     World Scientific. Linear theory (ch. 3-4), wave makers (ch. 6), solitary waves (ch. 11).
-Biesel, F. (1951) -- Etude theorique d'un type d'appareil a houle, La Houille Blanche 6.
+Biesel, F. & Suquet, F. (1951) -- Les appareils generateurs de houle en laboratoire, La Houille
+    Blanche 37(2), 147-165.
 Battjes, J.A. (1974) -- Surf similarity, Proc. 14th Coastal Engineering Conf., 466-480.
 Grilli, S.T., Svendsen, I.A. & Subramanya, R. (1997) -- Breaking criterion and characteristics
     for solitary waves on slopes, J. Waterway, Port, Coastal, Ocean Eng. 123(3), 102-112.

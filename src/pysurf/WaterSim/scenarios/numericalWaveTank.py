@@ -18,7 +18,8 @@ paddle a `pysurf.waveMakers.PistonWaveMaker`, and breaking is watched by a
 References:
 -----------
 DualSPHysics -- Wave generation in numerical tanks
-Biesel (1951) -- Wave maker theory
+Biesel & Suquet (1951) -- Les appareils generateurs de houle en laboratoire, La Houille Blanche 37(2), 147-165
+Madsen (1971) -- On the generation of long waves, J. Geophys. Res. 76(36), 8672-8683
 Battjes (1974) -- Surf similarity
 
 Sean Bowman [02/06/2026]

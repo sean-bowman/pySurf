@@ -86,13 +86,15 @@ ramp(t) = min(1, t / (n × T))  for n ramp-up cycles
 
 ### Second-Order Correction (Madsen 1971)
 
-Adds harmonic terms to eliminate parasitic long waves:
+A purely sinusoidal paddle also sheds a free second harmonic, which travels at its own speed and beats against the Stokes wave along the tank. A second harmonic in the paddle motion cancels it (Madsen 1971, eq. 32):
 ```
 X₂(t) = (S₂/2) × sin(2ωt)
-S₂ ≈ 0.25 × S × kH
+S₂ = S × H × (3 / (4 sinh²kh) − n/2) / (4 h n),    n = (1 + 2kh / sinh 2kh) / 2
 ```
 
-**Reference:** [Wave generation in SPH numerical tank](https://link.springer.com/article/10.1007/s40722-020-00163-x)
+S₂ changes sign at kh = 1.157 and holds while the Stokes second-order wave does (a L² / h³ < 4π² / 3, a = H/2). `waveMakers.PistonWaveMaker` implements it.
+
+**Reference:** Madsen, O.S. (1971), On the generation of long waves, J. Geophys. Res. 76(36), 8672-8683.
 
 ---
 

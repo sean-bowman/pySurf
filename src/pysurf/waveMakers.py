@@ -7,7 +7,8 @@ The ways a wave enters an SPH simulation.
 
     PistonWaveMaker     a moving wall: boundary particles on the offshore face oscillate
                         horizontally, with the stroke sized by Biesel's transfer function so the
-                        generated wave has the requested height
+                        generated wave has the requested height, and Madsen's second harmonic
+                        added so it leaves without a free second harmonic
     solitaryWaveFluid   an initial condition: fluid particles laid under a first-order solitary
                         wave already in motion, with the velocity field that carries it
     exactSolitaryWaveFluid
@@ -25,7 +26,8 @@ breaking.
 
 References:
 -----------
-Biesel, F. (1951) -- Etude theorique d'un type d'appareil a houle, La Houille Blanche 6.
+Biesel, F. & Suquet, F. (1951) -- Les appareils generateurs de houle en laboratoire, La Houille
+    Blanche 37(2), 147-165.
 Madsen, O.S. (1971) -- On the generation of long waves, J. Geophys. Res. 76(36), 8672-8683.
 Dean, R.G. & Dalrymple, R.A. (1991) -- Water Wave Mechanics for Engineers and Scientists, ch. 6
     (wave makers) and ch. 11 (solitary waves).
@@ -36,7 +38,10 @@ Dean, R.G. & Dalrymple, R.A. (1991) -- Water Wave Mechanics for Engineers and Sc
 
 tests/testWaveMakers.py checks the piston stroke against the shallow and deep limits of
 `waveTheory.pistonTransferFunction`, and the paddle velocity against the derivative of its
-displacement. It checks the solitary initial condition against its definition: the particles fill
+displacement. It checks the second-order stroke against the condition it is built to meet: carried
+through the transfer function at 2 omega, it radiates a free wave equal and opposite to the one
+Madsen's eq. 26 gives a purely sinusoidal paddle, from kd = 0.49 to 2.08, across the change of sign.
+Not validated: the second harmonic of the wave an SPH tank generates has not been measured. It checks the solitary initial condition against its definition: the particles fill
 the profile to within the lattice spacing and carry the wave's volume, and the velocity field
 satisfies continuity, the bed condition and the kinematic free-surface condition. The wave it launches is validated against the solitary celerity in
 tests/testValidationSolitary.py. The 3D exact wave over a flat height field matches the 2D one's
@@ -85,8 +90,8 @@ class WaveMakerConfig:
     rampCycles : int
         Wave periods over which the stroke ramps from zero
     useSecondOrder : bool
-        Add Madsen's second-order stroke, which suppresses the free second harmonic a purely
-        sinusoidal paddle radiates
+        Add Madsen's (1971) second-order stroke, which suppresses the free second harmonic a
+        purely sinusoidal paddle radiates
 
     '''
 
@@ -102,8 +107,18 @@ class PistonWaveMaker:
 
     A piston paddle made of boundary particles that move horizontally as a rigid wall.
 
-    X(t) = (S / 2) sin(omega t) ramp(t), with S = H / (H/S)_Biesel; with the second-order
-    correction, S2 = S k H / 4 adds (S2 / 2) sin(2 omega t).
+        X(t) = [(S / 2) sin(omega t) + (S2 / 2) sin(2 omega t)] ramp(t),    S = H / (H/S)_Biesel
+
+    A purely sinusoidal paddle sheds, besides the Stokes second-order wave, a free second harmonic
+    that travels at its own speed and beats against it along the tank. The second-order stroke of
+    Madsen (1971, eq. 32),
+
+        S2 = S H (3 / (4 sinh^2 kd) - n / 2) / (4 d n),    n = (1 + 2kd / sinh 2kd) / 2,
+
+    radiates by linear theory at 2 omega a free wave equal and opposite to that one (his eq. 26), so
+    the wave leaves as a Stokes second-order wave of permanent form. S2 changes sign at kd = 1.157:
+    in deeper water the second harmonic moves in antiphase. The theory holds while the Stokes
+    second-order wave does, a L^2 / d^3 < 4 pi^2 / 3 with a = H / 2 (Madsen's eq. 22).
 
     Parameters:
     -----------
@@ -117,8 +132,15 @@ class PistonWaveMaker:
         self._config = config
         self._omega = 2.0 * math.pi / config.wavePeriod
         self._k = float(waveTheory.dispersionWavenumber(self._omega, config.waterDepth))
-        self._stroke = config.waveHeight / float(waveTheory.pistonTransferFunction(self._k * config.waterDepth))
-        self._stroke2 = 0.25 * self._stroke * self._k * config.waveHeight if config.useSecondOrder else 0.0
+        kd = self._k * config.waterDepth
+        self._stroke = config.waveHeight / float(waveTheory.pistonTransferFunction(kd))
+        self._stroke2 = 0.0
+        if config.useSecondOrder:
+            # Madsen (1971) eq. 32; past kd = 25 the hyperbolic terms are zero to double precision
+            inverseSinhSquared = 1.0 / math.sinh(kd)**2 if kd < 25.0 else 0.0
+            groupRatio = 0.5 * (1.0 + 2.0 * kd / math.sinh(2.0 * kd)) if kd < 25.0 else 0.5
+            self._stroke2 = (self._stroke * config.waveHeight * (0.75 * inverseSinhSquared - 0.5 * groupRatio)
+                             / (4.0 * config.waterDepth * groupRatio))
 
         self._paddleMask: np.ndarray | None = None
         self._restX: np.ndarray | None = None
@@ -127,6 +149,11 @@ class PistonWaveMaker:
     def stroke(self) -> float:
         '''Piston stroke S, peak to peak [m].'''
         return self._stroke
+
+    @property
+    def secondOrderStroke(self) -> float:
+        '''Second-order stroke S2, peak to peak, negative in antiphase; zero without it [m].'''
+        return self._stroke2
 
     @property
     def wavenumber(self) -> float:
@@ -176,9 +203,7 @@ class PistonWaveMaker:
         '''Paddle displacement from rest [m].'''
 
         phase = self._omega * time
-        displacement = 0.5 * self._stroke * math.sin(phase)
-        if self._stroke2 > 0.0:
-            displacement += 0.5 * self._stroke2 * math.sin(2.0 * phase)
+        displacement = 0.5 * self._stroke * math.sin(phase) + 0.5 * self._stroke2 * math.sin(2.0 * phase)
 
         return displacement * self._ramp(time)
 
@@ -187,9 +212,7 @@ class PistonWaveMaker:
         '''Paddle velocity [m/s], the derivative of the displacement with the ramp held fixed.'''
 
         phase = self._omega * time
-        velocity = 0.5 * self._stroke * self._omega * math.cos(phase)
-        if self._stroke2 > 0.0:
-            velocity += self._stroke2 * self._omega * math.cos(2.0 * phase)
+        velocity = 0.5 * self._stroke * self._omega * math.cos(phase) + self._stroke2 * self._omega * math.cos(2.0 * phase)
 
         return velocity * self._ramp(time)
 

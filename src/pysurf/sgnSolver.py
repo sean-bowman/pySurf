@@ -41,12 +41,17 @@ and strong enough to be a breaking bore by the termination criterion below, star
 times the wave height, the dispersive part is switched off. There the shallow-water equations
 carry the front as a shock (a bore), which dissipates energy as a bore does. The wave stops
 breaking when the bore's Froude number, from the depths behind and ahead of it, falls below 1.3 (set it to zero to keep a wave breaking once
-it starts), and has stayed below it for 5 sqrt(h / g) (the transition time of Kennedy et al. 2000, which keeps a
-bore at the threshold from switching off and on), unless the front has reached the waterline or
+it starts), and has stayed below it for 5 sqrt(h / g), unless the front has reached the waterline or
 water too shallow to carry dispersion: there is nothing to switch back to, and on a plane beach a
 broken wave breaks on to the shoreline.
-These are the published values; Tissier et al. took the angle from Cienfuegos et al. (2010), who
-fit it to laboratory breaking for their SGN model. The solver follows one front at a time: before
+The angle, the Froude number, the zone width and the roller length are the published values;
+Tissier et al. took the angle from Cienfuegos et al. (2010), who fit it to laboratory breaking for
+their SGN model. Two parts are pySurf's. Tissier et al. switch a fully broken bore back at the
+first step its Froude number falls below 1.3; the solver waits 5 sqrt(h / g), which keeps a bore
+at the threshold from switching off and on. That time is the T* of Kennedy et al. (2000), in
+their Boussinesq model the time the breaking-onset threshold takes to relax from 0.65 to 0.15
+sqrt(g h), set for their equations and by their account not universal. And a front starts
+breaking only if it would pass the termination test, which Tissier et al. do not require. The solver follows one front at a time: before
 breaking, the one under the highest wet crest; once breaking, the same front from step to step.
 That suits a single solitary wave; periodic waves need the dissipation-based front tracking Tissier
 et al. describe.
@@ -719,8 +724,8 @@ class SgnSolver:
 
         Every front is checked each step. A front already breaking, found again where it should have
         travelled, keeps breaking until its bore's Froude number has stayed below the
-        termination value for 5 sqrt(h / g), the transition time Kennedy et al. (2000) give breaking,
-        with h the still water depth under its crest: a bore at the threshold dips under it and back
+        termination value for 5 sqrt(h / g), a persistence of pySurf's on the time scale of Kennedy et
+        al.'s (2000) T*, with h the still water depth under its crest: a bore at the threshold dips under it and back
         from step to step, and ending its breaking at the first dip would switch it off and on every
         few steps. A front that ends at the waterline, or stands over water too shallow to carry
         dispersion, has nothing to switch back to and keeps breaking. A new front starts breaking

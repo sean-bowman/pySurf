@@ -409,7 +409,7 @@ reef.summary()                               # breaking zones, where breaking st
 reef.writeAnimation('reefBreak.gif', lastPeriods = 3)
 ```
 
-`ReefBreak` drives the SGN solver with regular swell over a reef from `Bathymetry.reefBreak`: 10 m offshore, a 1:5 reef face up to a reef flat 2.5 m deep, a 6 m lagoon and a 1:20 beach. A mass source offshore (Wei, Kirby and Sinha 1999) sends 1.5 m, 12 s waves at the reef; the half that runs seaward is absorbed in a layer at the offshore end. The dispersion parameter is Bonneton et al.'s 1.159, which holds the phase speed within 1% of Airy's out to $kd = 3$. Breaking is decided front by front: a front starts when it is steeper than 30 degrees and strong enough to be a breaking bore, and stops when its bore Froude number has stayed below 1.3 for $5\sqrt{h/g}$, the transition time of Kennedy et al. (2000).
+`ReefBreak` drives the SGN solver with regular swell over a reef from `Bathymetry.reefBreak`: 10 m offshore, a 1:5 reef face up to a reef flat 2.5 m deep, a 6 m lagoon and a 1:20 beach. A mass source offshore (Wei, Kirby and Sinha 1999) sends 1.5 m, 12 s waves at the reef; the half that runs seaward is absorbed in a layer at the offshore end. The dispersion parameter is Bonneton et al.'s 1.159, which holds the phase speed within 1% of Airy's out to $kd = 3$. Breaking is decided front by front: a front starts when it is steeper than 30 degrees and strong enough to be a breaking bore, and stops when its bore Froude number has stayed below 1.3 for $5\sqrt{h/g}$. Tissier et al. stop a broken bore at once; the wait is pySurf's, on the time scale of Kennedy et al.'s (2000) breaking onset, which they give as not universal.
 
 Each wave shoals from 1.5 m to 2.1 m on the face and starts breaking at the reef edge, 379 m out, over 3.2 m of still water. The bore crosses the reef flat, weakens in the lagoon, and stops breaking at 463 m with a bore Froude number of 1.11. The wave reforms, crosses the lagoon, and breaks again as a shore break at 665 m in 1.2 m of water. The cycle repeats every period.
 
@@ -649,7 +649,9 @@ The δ-SPH validation runs in the tables above (Grilli's breaking point, the Sur
 - [ ] Fins on the generated board, and the board riding the SPH wave: its motion from the water's forces, the water feeling the board
 - [ ] SGN breaking that dissipates as a plunging breaker does on a steep reef, bringing the reef train's reflection and transmission to the flume's
 - [ ] Validate the shape of the splash-up against laboratory profiles of a breaking solitary wave
-- [ ] Bed friction in the swash, so the runup of a breaking wave can be measured
+- [ ] Validate the breaking point on a steep reef face against Quiroga and Cheung's (2013) measured breaking depth and height, with both the boundary element and the particle models
+- [ ] Measure the energy the boundary element model's smoothing removes during the overturn, and whether it moves the jet area that fails Pick and Feddersen's fit
+- [ ] Bed friction in the swash, so the runup of a breaking wave can be checked against Synolakis's (1987) measured breaking runup
 - [ ] Validate the peeling breaker against a 3D simulation or a laboratory peel, and replace strip theory's spanwise velocity, which overstates the 3D ridge's by 70%
 - [ ] Extend the breaking wave to periodic waves from the piston wave maker
 
