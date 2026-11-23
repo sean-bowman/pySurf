@@ -1,0 +1,586 @@
+{
+ "case": "slope20_h0.3",
+ "steepSmoothingInterval": 10,
+ "summary": {
+  "slopeParameter": 0.13884766832755963,
+  "predictedBreakerType": "plunging",
+  "surfaceNodes": 478,
+  "endTime": 6.733887790526782,
+  "touchedDown": true,
+  "stopReason": "the jet touched down",
+  "trimmedLoops": 0,
+  "wallClockSeconds": 1413.6099859999958,
+  "broke": true,
+  "breakingTime": 6.380869559397344,
+  "breakingIndex": 1.971338350276911,
+  "breakingHeightOverDepth": 0.4497743336737088,
+  "breakingDepthOverDepth": 0.22815684258895974,
+  "breakingDistanceFromToe": 15.436863148220803,
+  "breakingFaceDepthOverDepth": 0.22506303914953385,
+  "jetTipX": 31.30904992655533,
+  "impactX": 31.30348935678441,
+  "impactHeightOverDepth": 0.3983652511027327,
+  "cavityAreaOverDepthSquared": 0.05313936849415768,
+  "tubeLengthOverDepth": 0.3521713398574029,
+  "tubeHeightOverDepth": 0.2718698285463541,
+  "tubeRatio": 1.2953674989990929,
+  "overturnAreaOverImpactHeightSquared": 0.33485245864459595,
+  "jetAreaOverImpactHeightSquared": 0.16481408988139942,
+  "overturnAspectRatio": 0.4305893068694947,
+  "overturnAngle": 35.12668934776887,
+  "overturnFitErrorOverLength": 0.003779590967714764
+ },
+ "budget": {
+  "passesBeforeOverhang": 29,
+  "smoothingShareBeforeOverhang": 2.1699549557647202e-05,
+  "passesDuringOverturn": 31,
+  "smoothingShareOverOverturn": 4.989091402390674e-05,
+  "otherShareOverOverturn": -0.0030923483062570405,
+  "meanShareEachPass": 1.5974446849818025e-06,
+  "volumeChangeOverOverturn": 2.7995295105207768e-06
+ },
+ "passes": [
+  {
+   "time": 0.3161824205824678,
+   "step": 10,
+   "overhanging": false,
+   "energyBefore": 2972.857579566393,
+   "energyRemoved": 0.0003042878579435637,
+   "volumeBefore": 1.4386785508319926,
+   "volumeAfter": 1.4386845641189414
+  },
+  {
+   "time": 0.6323431042485939,
+   "step": 20,
+   "overhanging": false,
+   "energyBefore": 2972.855051232429,
+   "energyRemoved": 0.00023766968206473393,
+   "volumeBefore": 1.4386947158496985,
+   "volumeAfter": 1.43869747150953
+  },
+  {
+   "time": 0.9482779533833214,
+   "step": 30,
+   "overhanging": false,
+   "energyBefore": 2972.8548802149594,
+   "energyRemoved": 0.00020894108138236334,
+   "volumeBefore": 1.4387045041234958,
+   "volumeAfter": 1.4387072474930218
+  },
+  {
+   "time": 1.2644013497770594,
+   "step": 40,
+   "overhanging": false,
+   "energyBefore": 2972.8532003857754,
+   "energyRemoved": 0.0002080294580082409,
+   "volumeBefore": 1.4387118157489134,
+   "volumeAfter": 1.4387141399149068
+  },
+  {
+   "time": 1.5803974439513369,
+   "step": 50,
+   "overhanging": false,
+   "energyBefore": 2972.8517665743398,
+   "energyRemoved": 0.00020469471519390936,
+   "volumeBefore": 1.4387174129575433,
+   "volumeAfter": 1.438718063584219
+  },
+  {
+   "time": 1.896333974317166,
+   "step": 60,
+   "overhanging": false,
+   "energyBefore": 2972.8553214467292,
+   "energyRemoved": 0.00022699389592162333,
+   "volumeBefore": 1.4387197217041288,
+   "volumeAfter": 1.4387181112199694
+  },
+  {
+   "time": 2.21234530690726,
+   "step": 70,
+   "overhanging": false,
+   "energyBefore": 2972.8675680702836,
+   "energyRemoved": 0.0002574366767476022,
+   "volumeBefore": 1.438719462139238,
+   "volumeAfter": 1.4387177984527686
+  },
+  {
+   "time": 2.5283809584353456,
+   "step": 80,
+   "overhanging": false,
+   "energyBefore": 2972.889281924243,
+   "energyRemoved": 0.00027748034062824445,
+   "volumeBefore": 1.438719466759037,
+   "volumeAfter": 1.4387207147973053
+  },
+  {
+   "time": 2.8440339585435264,
+   "step": 90,
+   "overhanging": false,
+   "energyBefore": 2972.911985843674,
+   "energyRemoved": 0.00028373783970891964,
+   "volumeBefore": 1.4387208677173482,
+   "volumeAfter": 1.4387219109836735
+  },
+  {
+   "time": 3.159267331092776,
+   "step": 100,
+   "overhanging": false,
+   "energyBefore": 2972.929235167545,
+   "energyRemoved": 0.0002816799310494389,
+   "volumeBefore": 1.4387194897173232,
+   "volumeAfter": 1.4387181988441522
+  },
+  {
+   "time": 3.474021521233641,
+   "step": 110,
+   "overhanging": false,
+   "energyBefore": 2972.939173864308,
+   "energyRemoved": 0.00030346643234224757,
+   "volumeBefore": 1.4387115386518878,
+   "volumeAfter": 1.4387125294506529
+  },
+  {
+   "time": 3.788434124610496,
+   "step": 120,
+   "overhanging": false,
+   "energyBefore": 2972.941808060459,
+   "energyRemoved": 0.0003075527852161031,
+   "volumeBefore": 1.438698492222577,
+   "volumeAfter": 1.4386988184873661
+  },
+  {
+   "time": 4.10193386000879,
+   "step": 130,
+   "overhanging": false,
+   "energyBefore": 2972.9355466196985,
+   "energyRemoved": 0.0003305667933091172,
+   "volumeBefore": 1.438674908804174,
+   "volumeAfter": 1.4386745623775967
+  },
+  {
+   "time": 4.407455850458675,
+   "step": 140,
+   "overhanging": false,
+   "energyBefore": 2972.9184369563786,
+   "energyRemoved": 0.0003559033148121671,
+   "volumeBefore": 1.4386384913666275,
+   "volumeAfter": 1.4386395939151588
+  },
+  {
+   "time": 4.695062728920747,
+   "step": 150,
+   "overhanging": false,
+   "energyBefore": 2972.888892609296,
+   "energyRemoved": 0.00045285542591955164,
+   "volumeBefore": 1.4385943447740481,
+   "volumeAfter": 1.4385939472938751
+  },
+  {
+   "time": 4.962591111361625,
+   "step": 160,
+   "overhanging": false,
+   "energyBefore": 2972.824914262511,
+   "energyRemoved": 0.0006374885142577114,
+   "volumeBefore": 1.438541071923479,
+   "volumeAfter": 1.4385415586142007
+  },
+  {
+   "time": 5.210158658008819,
+   "step": 170,
+   "overhanging": false,
+   "energyBefore": 2972.6939715835097,
+   "energyRemoved": 0.0009741770554683171,
+   "volumeBefore": 1.4384912666604728,
+   "volumeAfter": 1.4384909253315916
+  },
+  {
+   "time": 5.437488249195321,
+   "step": 180,
+   "overhanging": false,
+   "energyBefore": 2972.4958752075236,
+   "energyRemoved": 0.0016064315432231524,
+   "volumeBefore": 1.4384433155378902,
+   "volumeAfter": 1.4384437456103292
+  },
+  {
+   "time": 5.547206491885654,
+   "step": 190,
+   "overhanging": false,
+   "energyBefore": 2972.3635463782584,
+   "energyRemoved": 0.00027805747367892764,
+   "volumeBefore": 1.4384282930329249,
+   "volumeAfter": 1.438428536746441
+  },
+  {
+   "time": 5.651743881479784,
+   "step": 200,
+   "overhanging": false,
+   "energyBefore": 2972.259230068181,
+   "energyRemoved": 0.0003491567331366241,
+   "volumeBefore": 1.4384204095239257,
+   "volumeAfter": 1.4384203357822098
+  },
+  {
+   "time": 5.750925192557268,
+   "step": 210,
+   "overhanging": false,
+   "energyBefore": 2972.154524431219,
+   "energyRemoved": 0.0004487828146011452,
+   "volumeBefore": 1.4384151818676605,
+   "volumeAfter": 1.438415095185431
+  },
+  {
+   "time": 5.844939780456188,
+   "step": 220,
+   "overhanging": false,
+   "energyBefore": 2972.052018346943,
+   "energyRemoved": 0.0005990953181935765,
+   "volumeBefore": 1.4384116107019258,
+   "volumeAfter": 1.4384117342204341
+  },
+  {
+   "time": 5.933575481109582,
+   "step": 230,
+   "overhanging": false,
+   "energyBefore": 2971.953195211675,
+   "energyRemoved": 0.0008463550370834128,
+   "volumeBefore": 1.4384093312881703,
+   "volumeAfter": 1.4384095860490498
+  },
+  {
+   "time": 6.0167968684463125,
+   "step": 240,
+   "overhanging": false,
+   "energyBefore": 2971.8595705202315,
+   "energyRemoved": 0.0012682176266025635,
+   "volumeBefore": 1.4384080137219297,
+   "volumeAfter": 1.4384081792525054
+  },
+  {
+   "time": 6.094584147217121,
+   "step": 250,
+   "overhanging": false,
+   "energyBefore": 2971.7717324802943,
+   "energyRemoved": 0.0020326900353211386,
+   "volumeBefore": 1.4384070035874832,
+   "volumeAfter": 1.4384069321842432
+  },
+  {
+   "time": 6.1668944123847655,
+   "step": 260,
+   "overhanging": false,
+   "energyBefore": 2971.6905191894175,
+   "energyRemoved": 0.003486435317881842,
+   "volumeBefore": 1.438405718186945,
+   "volumeAfter": 1.438405398794321
+  },
+  {
+   "time": 6.233631197115281,
+   "step": 270,
+   "overhanging": false,
+   "energyBefore": 2971.61812365446,
+   "energyRemoved": 0.006455213259869197,
+   "volumeBefore": 1.4384039665648114,
+   "volumeAfter": 1.4384034105249963
+  },
+  {
+   "time": 6.294749404695434,
+   "step": 280,
+   "overhanging": false,
+   "energyBefore": 2971.5628452615247,
+   "energyRemoved": 0.013169842509341834,
+   "volumeBefore": 1.4384025524913207,
+   "volumeAfter": 1.438401595614474
+  },
+  {
+   "time": 6.350259112951982,
+   "step": 290,
+   "overhanging": false,
+   "energyBefore": 2971.54986857395,
+   "energyRemoved": 0.02811643090672078,
+   "volumeBefore": 1.4384035372719652,
+   "volumeAfter": 1.4384016365924572
+  },
+  {
+   "time": 6.39206021650107,
+   "step": 300,
+   "overhanging": true,
+   "energyBefore": 2971.673800653227,
+   "energyRemoved": 0.019381236169010663,
+   "volumeBefore": 1.4384298810535054,
+   "volumeAfter": 1.4384291247205594
+  },
+  {
+   "time": 6.411349259874611,
+   "step": 310,
+   "overhanging": true,
+   "energyBefore": 2971.8234681534673,
+   "energyRemoved": -0.004028245472909475,
+   "volumeBefore": 1.438448645522012,
+   "volumeAfter": 1.438449778227964
+  },
+  {
+   "time": 6.4262635118850095,
+   "step": 320,
+   "overhanging": true,
+   "energyBefore": 2971.8891400819307,
+   "energyRemoved": -0.012565692979933374,
+   "volumeBefore": 1.4384574788554003,
+   "volumeAfter": 1.438459272099354
+  },
+  {
+   "time": 6.4390051977387595,
+   "step": 330,
+   "overhanging": true,
+   "energyBefore": 2971.939255110021,
+   "energyRemoved": -0.018802120817781542,
+   "volumeBefore": 1.4384633799659547,
+   "volumeAfter": 1.4384654762214577
+  },
+  {
+   "time": 6.4513843284803745,
+   "step": 340,
+   "overhanging": true,
+   "energyBefore": 2972.036643663174,
+   "energyRemoved": -0.02529640093598573,
+   "volumeBefore": 1.438473039434693,
+   "volumeAfter": 1.4384753682878881
+  },
+  {
+   "time": 6.463462496720196,
+   "step": 350,
+   "overhanging": true,
+   "energyBefore": 2972.2040704609963,
+   "energyRemoved": -0.031169264135314734,
+   "volumeBefore": 1.438488725151618,
+   "volumeAfter": 1.4384912412670712
+  },
+  {
+   "time": 6.475312769468998,
+   "step": 360,
+   "overhanging": true,
+   "energyBefore": 2972.442352564059,
+   "energyRemoved": -0.03761371588416296,
+   "volumeBefore": 1.4385104700349363,
+   "volumeAfter": 1.4385132217241194
+  },
+  {
+   "time": 6.486948704700193,
+   "step": 370,
+   "overhanging": true,
+   "energyBefore": 2972.7394156928676,
+   "energyRemoved": -0.03465192817748175,
+   "volumeBefore": 1.4385365536885704,
+   "volumeAfter": 1.4385390521101247
+  },
+  {
+   "time": 6.4984416201499124,
+   "step": 380,
+   "overhanging": true,
+   "energyBefore": 2973.0928352420697,
+   "energyRemoved": -0.031802750948372704,
+   "volumeBefore": 1.4385672793223687,
+   "volumeAfter": 1.4385696122883755
+  },
+  {
+   "time": 6.509836072278711,
+   "step": 390,
+   "overhanging": true,
+   "energyBefore": 2973.5017392552545,
+   "energyRemoved": -0.02667118380759348,
+   "volumeBefore": 1.4386025094337955,
+   "volumeAfter": 1.438604593888893
+  },
+  {
+   "time": 6.52115265954778,
+   "step": 400,
+   "overhanging": true,
+   "energyBefore": 2973.947146240027,
+   "energyRemoved": -0.015952168190779048,
+   "volumeBefore": 1.4386399884930183,
+   "volumeAfter": 1.4386414898625044
+  },
+  {
+   "time": 6.532363903306901,
+   "step": 410,
+   "overhanging": true,
+   "energyBefore": 2974.4247662432,
+   "energyRemoved": -0.02837133763841848,
+   "volumeBefore": 1.4386823588686923,
+   "volumeAfter": 1.4386844967389323
+  },
+  {
+   "time": 6.543552770534637,
+   "step": 420,
+   "overhanging": true,
+   "energyBefore": 2974.912666471332,
+   "energyRemoved": -0.011075928987338557,
+   "volumeBefore": 1.4387225573739904,
+   "volumeAfter": 1.4387238448444863
+  },
+  {
+   "time": 6.554615985407133,
+   "step": 430,
+   "overhanging": true,
+   "energyBefore": 2975.3983809375386,
+   "energyRemoved": -0.017815136048739078,
+   "volumeBefore": 1.4387655901818608,
+   "volumeAfter": 1.438767216079909
+  },
+  {
+   "time": 6.565636362956324,
+   "step": 440,
+   "overhanging": true,
+   "energyBefore": 2975.8695786467724,
+   "energyRemoved": -0.013319563681761792,
+   "volumeBefore": 1.438805990330638,
+   "volumeAfter": 1.4388074179716426
+  },
+  {
+   "time": 6.576607124900782,
+   "step": 450,
+   "overhanging": true,
+   "energyBefore": 2976.3115978886217,
+   "energyRemoved": -0.014436524232678494,
+   "volumeBefore": 1.4388445221213233,
+   "volumeAfter": 1.4388460183262741
+  },
+  {
+   "time": 6.5875365164312445,
+   "step": 460,
+   "overhanging": true,
+   "energyBefore": 2976.7406730134153,
+   "energyRemoved": -0.019241045024500636,
+   "volumeBefore": 1.4388822678937263,
+   "volumeAfter": 1.438883961755594
+  },
+  {
+   "time": 6.598426374912906,
+   "step": 470,
+   "overhanging": true,
+   "energyBefore": 2977.1784849133624,
+   "energyRemoved": -0.007679387299049267,
+   "volumeBefore": 1.4389193973680081,
+   "volumeAfter": 1.4389205876766844
+  },
+  {
+   "time": 6.609207675161092,
+   "step": 480,
+   "overhanging": true,
+   "energyBefore": 2977.614257572673,
+   "energyRemoved": -0.004032916977394052,
+   "volumeBefore": 1.4389567034205362,
+   "volumeAfter": 1.4389575726059882
+  },
+  {
+   "time": 6.619924738029339,
+   "step": 490,
+   "overhanging": true,
+   "energyBefore": 2978.00825391897,
+   "energyRemoved": 0.015828866675292375,
+   "volumeBefore": 1.4389889058991603,
+   "volumeAfter": 1.438988763045738
+  },
+  {
+   "time": 6.6305561101511845,
+   "step": 500,
+   "overhanging": true,
+   "energyBefore": 2978.3840881927686,
+   "energyRemoved": 0.017384699793637992,
+   "volumeBefore": 1.4390202150816838,
+   "volumeAfter": 1.439019429492776
+  },
+  {
+   "time": 6.641098695937239,
+   "step": 510,
+   "overhanging": true,
+   "energyBefore": 2978.6949907267735,
+   "energyRemoved": 0.021819386792230944,
+   "volumeBefore": 1.4390475076375906,
+   "volumeAfter": 1.4390465882990777
+  },
+  {
+   "time": 6.651562280359859,
+   "step": 520,
+   "overhanging": true,
+   "energyBefore": 2979.0175798347127,
+   "energyRemoved": 0.027755675238040567,
+   "volumeBefore": 1.4390751476293269,
+   "volumeAfter": 1.4390737811927743
+  },
+  {
+   "time": 6.6618985864686895,
+   "step": 530,
+   "overhanging": true,
+   "energyBefore": 2979.3208439486198,
+   "energyRemoved": 0.042750189088110346,
+   "volumeBefore": 1.4391008571265236,
+   "volumeAfter": 1.4390985839050099
+  },
+  {
+   "time": 6.672202817777091,
+   "step": 540,
+   "overhanging": true,
+   "energyBefore": 2979.5976180260127,
+   "energyRemoved": 0.04535111379254886,
+   "volumeBefore": 1.439125547581479,
+   "volumeAfter": 1.43912318089618
+  },
+  {
+   "time": 6.682416851662982,
+   "step": 550,
+   "overhanging": true,
+   "energyBefore": 2979.8611234382993,
+   "energyRemoved": 0.05506648860273344,
+   "volumeBefore": 1.4391490846427888,
+   "volumeAfter": 1.439146105949499
+  },
+  {
+   "time": 6.69250777480529,
+   "step": 560,
+   "overhanging": true,
+   "energyBefore": 2980.1070492578983,
+   "energyRemoved": 0.05971317629246187,
+   "volumeBefore": 1.4391719652803636,
+   "volumeAfter": 1.4391686658537375
+  },
+  {
+   "time": 6.702522456990302,
+   "step": 570,
+   "overhanging": true,
+   "energyBefore": 2980.332310313156,
+   "energyRemoved": 0.056029833166121534,
+   "volumeBefore": 1.4391940397883878,
+   "volumeAfter": 1.4391907974292182
+  },
+  {
+   "time": 6.712435113205262,
+   "step": 580,
+   "overhanging": true,
+   "energyBefore": 2980.551392302382,
+   "energyRemoved": 0.0630913315089856,
+   "volumeBefore": 1.4392161843001945,
+   "volumeAfter": 1.439212482061992
+  },
+  {
+   "time": 6.722261321704429,
+   "step": 590,
+   "overhanging": true,
+   "energyBefore": 2980.7458452201213,
+   "energyRemoved": 0.053072663200055104,
+   "volumeBefore": 1.439238865423613,
+   "volumeAfter": 1.439235277165324
+  },
+  {
+   "time": 6.731956077484743,
+   "step": 600,
+   "overhanging": true,
+   "energyBefore": 2980.8479418660627,
+   "energyRemoved": 0.025540173016452172,
+   "volumeBefore": 1.4392611424009376,
+   "volumeAfter": 1.4392578262444493
+  }
+ ],
+ "steps": 602,
+ "wallSeconds": 1430.9368729999987
+}

@@ -1,0 +1,116 @@
+{
+ "case": "cavityArea",
+ "run": "D:\\pySurfRuns\\surfRanch32",
+ "particlesPerDepth": 32,
+ "relativeSubmergence": 0.6183333333333334,
+ "band": {
+  "relativeSubmergenceAtMost": 0.9,
+  "points": 9,
+  "low": 0.154,
+  "high": 0.408
+ },
+ "pooledRange": [
+  0.029,
+  0.41
+ ],
+ "sections": {
+  "0.5": {
+   "breakingTime": 6.489268379637158,
+   "frameTime": 6.490868071752583,
+   "crestX": 40.897341829504015,
+   "crestHeight": 0.6960130658686008,
+   "profileCrestHeight": 0.7230614423751831,
+   "troughHeight": 0.00046193599700927734,
+   "breakingHeight": 0.6955511298715915,
+   "breakerIndex": 1.874800889141756,
+   "cavityArea": 0.12479198758001075,
+   "cavityAreaOverBreakingHeightSquared": 0.25794587133644936,
+   "reading": "consistent",
+   "withinPooledRange": true
+  },
+  "1.0": {
+   "breakingTime": 6.526383792860105,
+   "frameTime": 6.522687213316414,
+   "crestX": 41.037966829504015,
+   "crestHeight": 0.698747957275901,
+   "profileCrestHeight": 0.7235535383224487,
+   "troughHeight": -9.846687316894531e-05,
+   "breakingHeight": 0.69884642414907,
+   "breakerIndex": 1.8836830839597574,
+   "cavityArea": 0.11365036198822054,
+   "cavityAreaOverBreakingHeightSquared": 0.23270586475549362,
+   "reading": "consistent",
+   "withinPooledRange": true
+  },
+  "1.5": {
+   "breakingTime": 6.585367230532516,
+   "frameTime": 6.586418771167541,
+   "crestX": 41.272341829504015,
+   "crestHeight": 0.6930466837248106,
+   "profileCrestHeight": 0.7190978527069092,
+   "troughHeight": -0.0005095005035400391,
+   "breakingHeight": 0.6935561842283506,
+   "breakerIndex": 1.8694236771653656,
+   "cavityArea": 0.11550592133244209,
+   "cavityAreaOverBreakingHeightSquared": 0.24012697589698212,
+   "reading": "consistent",
+   "withinPooledRange": true
+  },
+  "2.0": {
+   "breakingTime": 6.633152525281594,
+   "frameTime": 6.634200982859097,
+   "crestX": 41.444216829504015,
+   "crestHeight": 0.6886299574898316,
+   "profileCrestHeight": 0.7142213582992554,
+   "troughHeight": -0.0001297593116760254,
+   "breakingHeight": 0.6887597168015076,
+   "breakerIndex": 1.8564951935350609,
+   "cavityArea": 0.12007106641249266,
+   "cavityAreaOverBreakingHeightSquared": 0.2531062621545225,
+   "reading": "consistent",
+   "withinPooledRange": true
+  },
+  "2.5": {
+   "breakingTime": 6.689133345698608,
+   "frameTime": 6.690177568303048,
+   "crestX": 41.647341829504015,
+   "crestHeight": 0.6858286816952628,
+   "profileCrestHeight": 0.711308479309082,
+   "troughHeight": 6.347894668579102e-05,
+   "breakingHeight": 0.685765202748577,
+   "breakerIndex": 1.8484237270851132,
+   "cavityArea": 0.11529985697234224,
+   "cavityAreaOverBreakingHeightSquared": 0.24517595748202614,
+   "reading": "consistent",
+   "withinPooledRange": true
+  },
+  "3.0": {
+   "breakingTime": 6.733944451924232,
+   "frameTime": 6.730303905391662,
+   "crestX": 41.819216829504015,
+   "crestHeight": 0.6820038922140002,
+   "profileCrestHeight": 0.7091740369796753,
+   "troughHeight": 0.002125263214111328,
+   "breakingHeight": 0.6798786289998888,
+   "breakerIndex": 1.8325569514821802,
+   "cavityArea": 0.11049146717687108,
+   "cavityAreaOverBreakingHeightSquared": 0.23903745732781786,
+   "reading": "consistent",
+   "withinPooledRange": true
+  },
+  "3.5": {
+   "breakingTime": 6.765618285298184,
+   "frameTime": 6.7619886404015785,
+   "crestX": 41.944216829504015,
+   "crestHeight": 0.6722811397936987,
+   "profileCrestHeight": 0.6949658393859863,
+   "troughHeight": -0.0008180737495422363,
+   "breakingHeight": 0.673099213543241,
+   "breakerIndex": 1.8142835944561753,
+   "cavityArea": 0.11576173270623258,
+   "cavityAreaOverBreakingHeightSquared": 0.2555093824927471,
+   "reading": "consistent",
+   "withinPooledRange": true
+  }
+ }
+}

@@ -1,0 +1,100 @@
+{
+ "case": "mostertEnergy",
+ "particlesPerDepth": 32,
+ "settings": "pySurf",
+ "summary": {
+  "slopeParameter": 0.1455339591135131,
+  "predictedBreakerType": "plunging",
+  "particlesPerDepth": 32,
+  "bedFitted": true,
+  "startJitter": 0.0,
+  "startSeed": 1,
+  "startPacking": false,
+  "faceArc": 2.0,
+  "fluidParticles": 24080,
+  "wallClockSeconds": 159.17860030000156,
+  "broke": true,
+  "breakingTime": 6.396736337979508,
+  "breakingIndex": 2.565075411428071,
+  "breakingHeightOverDepth": 0.43040051155179726,
+  "breakingDepthOverDepth": 0.16779253726196597,
+  "breakingDistanceFromToe": 15.879464349051908,
+  "breakingFaceDepthOverDepth": 0.16178433662808045,
+  "maxRunupOverDepth": 0.6976382533040262,
+  "touchedDown": false,
+  "failure": null,
+  "wall": 270.7178899999999
+ },
+ "reference": {
+  "shareLost": 0.31
+ },
+ "dissipation": {
+  "breakingTime": 6.396736337979508,
+  "activeEndTime": 9.262418774114206,
+  "activeDuration": 2.8656824361346978,
+  "activeDurationOverScale": 8.97404823844788,
+  "startEnergy": 2764.8760473546517,
+  "breakingEnergy": 2716.2427075222795,
+  "activeEndEnergy": 2166.9255161317874,
+  "energyShareLost": 0.2022342075210105,
+  "dissipationRate": 191.68808953284596,
+  "scaledDissipation": 0.0010116563749866926,
+  "scaledDissipationFit": 0.0019709396154205753,
+  "breakingHeightOverDepth": 0.43040051155179726,
+  "breakingFaceDepthOverDepth": 0.16178433662808045,
+  "activeEndReached": true
+ },
+ "verdict": {
+  "shareError": -34.76315886419016,
+  "rateError": -48.67136633352326,
+  "passes": false
+ },
+ "budget": {
+  "breakingTime": 6.396736337979508,
+  "activeEndTime": 9.262418774114206,
+  "terms": {
+   "pressureFluid": -10.03498215595534,
+   "viscosityFluid": -91.80839136921803,
+   "pressureWall": -399.39484898766955,
+   "viscosityWall": 0.0,
+   "gravityWork": 125.7219711882172,
+   "continuityFluid": 2.1258296288041763,
+   "continuityWall": 235.15880784636065,
+   "correction": 90.78722708898604,
+   "diffusion": -329.800779185423,
+   "floor": 0.0,
+   "drift": -129.07229906835468,
+   "clamp": -44.72866153453457,
+   "shifting": 0.0,
+   "filter": 0.0,
+   "refinement": 0.0
+  },
+  "groups": {
+   "viscous": -91.80839136921803,
+   "diffusive": -329.800779185423,
+   "walls": -208.96470267584345,
+   "correction": 90.78722708898604,
+   "timeStepping": -11.259480407288649,
+   "other": 0.0,
+   "total": -551.0461265487871
+  },
+  "mechanicalChange": -549.3171913904921,
+  "elasticChange": -1.728914458848834,
+  "closure": -2.0699446167782298e-05,
+  "shareOfLoss": {
+   "viscous": 0.16713183713916277,
+   "diffusive": 0.600383138111143,
+   "walls": 0.38040808835217593,
+   "correction": -0.16527286695538407,
+   "timeStepping": 0.020497229257994663,
+   "other": -0.0,
+   "elastic": -0.00314738822295442
+  },
+  "reading": {
+   "limit": 0.1,
+   "partOfDeficit": [
+    "walls"
+   ]
+  }
+ }
+}

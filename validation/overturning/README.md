@@ -19,7 +19,7 @@ python smoothingEnergy.py report              # the reading, from results/
 | Energy the smoothing removes over the overturn | -0.05 to +0.07 percent of the wave's energy, under 0.0013 percent a pass (Longuet-Higgins and Cokelet 1976: 0.06 percent) |
 | Energy everything else changes over the overturn | Gains 0.11 to 0.35 percent, more the less often the surface is smoothed |
 
-The default interval stays at 3. Each script's docstring holds its criteria and recorded result; records go to `results/`, which is not tracked.
+The default interval stays at 3. Each script's docstring holds its criteria and recorded result; each run's record, with every smoothing pass, is in `results/`.
 
 ## References
 
