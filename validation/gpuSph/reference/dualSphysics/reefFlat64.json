@@ -1,0 +1,91 @@
+{
+ "source": "DualSPHysics v5.4 (commit ef3721a; Dominguez et al. 2022), pySurf's reference run of the reef-flat validation's tank, the oregonReef case of dualSphysics/tools/gateRuns.py (in the repository's history to commit 27c0a03), recorded 2026-11-19. A cross-check of that validation: it validates neither code.",
+ "case": "Quiroga and Cheung's (2013) Oregon State fringing reef: H0/h0 = 0.4, a 1:12 face to a flat 0.113 h0 deep closed by a wall 28.9 m past the reef edge, 2D, the CPU solver on 6 OpenMP threads; gauge maxima at WG9 to WG14 against the flume's smooth-bed records, 64 ppd",
+ "note": "Times in seconds from the crest's passage of the tuning gauge, as pySurf's count from its starting crest; h0 = 1 m. runWall is the solver's wall time in seconds; fluidParticles and wallClockSeconds in the summary fields are placeholders.",
+ "record": {
+  "code": "DualSPHysics 5.4 CPU",
+  "ppd": 64,
+  "ratio": 0.4,
+  "tuning": {
+   "paddleHeight": 0.412,
+   "gaugeHeight": 0.39647660250930133,
+   "gaugeError": -0.008808493726746747,
+   "passage": 5.431152448604026,
+   "history": [
+    {
+     "paddleHeight": 0.412,
+     "gaugeHeight": 0.39647660250930133,
+     "passage": 5.431152448604026,
+     "wall": 7473.472706400033
+    }
+   ],
+   "withinTwoPercent": true
+  },
+  "passage": 5.431152448604026,
+  "gaugeHeight": 0.39647660250930133,
+  "waveVolumes": {
+   "aheadOverExact": 0.9189222846320954,
+   "behindOverExact": 0.9480700395963957,
+   "largestGapOverH": 0.04995014574712242
+  },
+  "runWall": 18134.91080880002,
+  "arrivals": {
+   "WG9": 14.659948436849637,
+   "WG10": 15.9000877521729,
+   "WG11": 17.16001570283843,
+   "WG12": 18.700022615396747,
+   "WG13": 21.760041550764544,
+   "WG14": 25.080046310255103
+  },
+  "boreSpeed": 0.8632442543169514,
+  "results": {
+   "WG9": {
+    "x": 22.96485224154411,
+    "arrival": 14.659948436849637,
+    "windowEnd": 17.65994843684964,
+    "columnMax": 1.044921875,
+    "topMax": 1.0405880212783813
+   },
+   "WG10": {
+    "x": 24.33327329417569,
+    "arrival": 15.9000877521729,
+    "windowEnd": 18.9000877521729,
+    "columnMax": 0.6640625,
+    "topMax": 0.7199785113334656
+   },
+   "WG11": {
+    "x": 25.705453745303515,
+    "arrival": 17.16001570283843,
+    "windowEnd": 20.16001570283843,
+    "columnMax": 0.8203125,
+    "topMax": 1.117299199104309
+   },
+   "WG12": {
+    "x": 27.08891239192005,
+    "arrival": 18.700022615396747,
+    "windowEnd": 21.700022615396747,
+    "columnMax": 0.83984375,
+    "topMax": 0.9994375705718994
+   },
+   "WG13": {
+    "x": 29.848310888160654,
+    "arrival": 21.760041550764544,
+    "windowEnd": 24.760041550764544,
+    "columnMax": 0.60546875,
+    "topMax": 0.5913552641868591
+   },
+   "WG14": {
+    "x": 32.59643118891253,
+    "arrival": 25.080046310255103,
+    "windowEnd": 28.076590605153424,
+    "columnMax": 0.400390625,
+    "topMax": 0.4063504934310913
+   }
+  },
+  "measured": {
+   "WG12": 0.608,
+   "WG13": 0.558,
+   "WG14": 0.53
+  }
+ }
+}

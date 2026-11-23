@@ -4,7 +4,7 @@
 '''
 
 Writes the blockMeshDict of a wave flume whose bed is piecewise linear in x and may run oblique to
-the incoming crest, for the two cases in openFoam/cases:
+the incoming crest, for the two cases in examples/openFoam/cases:
 
     solitaryBreaking2D    Grilli, Svendsen and Subramanya (1997): h0 = 1 m, a 1:35 plane slope from
                           x = 10 m, one cell across, front and back empty

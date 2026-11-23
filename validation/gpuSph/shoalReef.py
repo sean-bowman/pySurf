@@ -4,7 +4,7 @@
 
 The 2D Surf Ranch profile with its toe along x = 30 + y tan 25 h0, the 0.0693 face up to a shelf
 0.371 h0 deep and the shelf to an end wall at x = 52 h0, across a span of 4 h0 between free-slip
-walls (the geometry of openFoam/cases/breakingWave3D). The exact solitary wave of H/h0 = 0.6 starts
+walls (the geometry of examples/openFoam/cases/breakingWave3D). The exact solitary wave of H/h0 = 0.6 starts
 with its crest at x = 15 h0. `BreakingWave3D` reads nine sections, y = 0 to 4 h0 every 0.5, each two
 particle rows wide. Times count from the crest's passage of the gauge at x = 20 h0, as
 DualSPHysics's do. The run stops 0.1 s after the seven inner sections have each touched down, or at
@@ -14,7 +14,7 @@ With --zone the crest's water splits once with the smoothing length kept, from w
 first falls to 0.55 h0: 1 h0 behind each strip's crest to 1.5 ahead, from 0.4 h0 under still water
 up, the daughters merging 1.5 h0 behind.
 
-Reference: DualSPHysics's 32 ppd run (reference/dualSphysicsShoal32.json). No measurement exists for
+Reference: DualSPHysics's 32 ppd run (reference/dualSphysics/shoalReef32.json). No measurement exists for
 this tank, so this is a cross-check between two unvalidated codes: nothing passes or fails. Per
 section: breaking time, the crest's distance past its own shelf edge (x = 30 + y tan 25 + 9.08 h0),
 Hb/h0, touchdown time, and at touchdown H/h0, A_O/H², A_J/H² and theta_O. A line through the seven
@@ -107,7 +107,7 @@ def main(ppd: int, useZone: bool, afterGauge: float) -> dict:
             break
 
     summary = wave.summary()
-    dualSph = readReference('dualSphysicsShoal32.json')
+    dualSph = readReference('dualSphysics/shoalReef32.json')
     tanAngle = math.tan(math.radians(angle))
     passages = [passage(np.array(wave.trackers[y].times, float), np.array(wave.trackers[y].crestX, float), gaugeX)
                 for y in sections]

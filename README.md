@@ -537,11 +537,10 @@ repo_root/
 │   ├── gpuBackend/                  The splash-up, the peel and the A-frame on the CPU and GPU backends side by side
 │   ├── surfaceWave/                 Breaking wave animation, free-surface model
 │   ├── reefBreak/                   Swell over a reef animation, free-surface model
-│   └── reefOverturn/                A reef overturn at jet impact
+│   ├── reefOverturn/                A reef overturn at jet impact
+│   └── openFoam/                    OpenFOAM guide and breaking-wave cases (cross-checks)
 ├── tests/                           pytest suite; `-m slow` runs the validation cases
-├── validation/gpuSph/               The δ-SPH breaking-wave model's validation runs (GPU hours each), their references and results
-├── dualSphysics/                    Reference runs of the breaking-wave cases in DualSPHysics: case writers and tools (cross-checks)
-├── openFoam/                        OpenFOAM guide and breaking-wave cases (cross-checks)
+├── validation/gpuSph/               The δ-SPH breaking-wave model's validation runs (GPU hours each), their references, DualSPHysics's cross-check runs and the results
 │
 └── src/
     └── pysurf/

@@ -120,7 +120,7 @@ Keep cases in the Linux file system, not under `/mnt/c`: OpenFOAM writes many sm
 
 ```bash
 mkdir -p ~/foam
-cp -r /mnt/c/Users/seanb/Desktop/Main/personalCodeProjects/pySurf/openFoam ~/foam/
+cp -r /mnt/c/<path to pySurf>/examples/openFoam ~/foam/
 chmod +x ~/foam/openFoam/cases/*/All*
 ```
 

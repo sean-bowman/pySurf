@@ -1,0 +1,68 @@
+{
+ "source": "DualSPHysics v5.4 (commit ef3721a; Dominguez et al. 2022), pySurf's reference run, written, run and measured with pySurf's breaking tracker by dualSphysics/tools/gateRuns.py (in the repository's history to commit 27c0a03), recorded 2026-11-10. A cross-check: it validates neither code.",
+ "case": "Solitary wave of H0/h0 = 0.3 on Grilli et al.'s (1997) 1:35 plane beach, 2D, mDBC walls in slip mode 1, 32 ppd",
+ "note": "Times in seconds from the crest's passage of the tuning gauge, as pySurf's count from its starting crest; h0 = 1 m. runWall is the solver's wall time in seconds; fluidParticles and wallClockSeconds in the summary fields are placeholders.",
+ "record": {
+  "slopeParameter": 0.0793415247586055,
+  "predictedBreakerType": "plunging",
+  "particlesPerDepth": 32,
+  "fluidParticles": 0,
+  "wallClockSeconds": 0.0,
+  "broke": true,
+  "breakingTime": 10.07618398749872,
+  "breakingIndex": 1.4801500282481732,
+  "breakingHeightOverDepth": 0.35465074069698677,
+  "breakingDepthOverDepth": 0.23960459002708834,
+  "breakingDistanceFromToe": 26.613839349051908,
+  "breakingFaceDepthOverDepth": 0.23656794107700296,
+  "maxRunupOverDepth": -0.028209653329264728,
+  "touchedDown": true,
+  "touchdownTime": 10.387608799186971,
+  "jetTipX": 40.28019319856453,
+  "impactX": 40.27147694026793,
+  "impactHeightOverDepth": 0.31173006232855616,
+  "cavityAreaOverDepthSquared": 0.004815301334929245,
+  "pocketAreaOverDepthSquared": 0.004129785383156559,
+  "overturnAreaOverImpactHeightSquared": 0.04955256011973558,
+  "jetAreaOverImpactHeightSquared": 0.106336798153532,
+  "overturnAspectRatio": 0.22326070294283037,
+  "overturnAngle": 47.522051373224585,
+  "framesRead": 1567,
+  "lastTime": 14.00012569968343,
+  "tuning": {
+   "paddleHeight": 0.330242153078718,
+   "gaugeHeight": 0.2975313953997222,
+   "gaugeError": -0.00822868200092608,
+   "passage": 6.29109000000008,
+   "history": [
+    {
+     "paddleHeight": 0.341,
+     "gaugeHeight": 0.3144278214378608,
+     "passage": 6.1830785000000015,
+     "wall": 235.52666549989954
+    },
+    {
+     "paddleHeight": 0.3253528887239934,
+     "gaugeHeight": 0.2934427926341921,
+     "passage": 6.32509799999999,
+     "wall": 230.67778699996416
+    },
+    {
+     "paddleHeight": 0.330242153078718,
+     "gaugeHeight": 0.2975313953997222,
+     "passage": 6.29109000000008,
+     "wall": 223.37747690000106
+    }
+   ],
+   "withinTwoPercent": true
+  },
+  "gaugeHeight": 0.2975313953997222,
+  "passage": 6.29109000000008,
+  "runWall": 644.3826422999846,
+  "window": [
+   9.00009442091515,
+   14.00012569968343
+  ],
+  "passesGrilli": false
+ }
+}

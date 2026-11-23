@@ -1,5 +1,5 @@
 {
-  "source": "DualSPHysics v5.4 (Dominguez et al. 2022), pySurf's reference run of the Surf Ranch reef turned 25 degrees at 32 particles per depth (dualSphysics/tools/reefRuns.py, 2026-11-09), measured with pySurf's breaking tracker under decision 14 of the GPU SPH roadmap. A cross-check: no measurement exists for this tank.",
+  "source": "DualSPHysics v5.4 (Dominguez et al. 2022), pySurf's reference run of the Surf Ranch reef turned 25 degrees at 32 particles per depth (dualSphysics/tools/reefRuns.py, in the repository's history to commit 27c0a03; 2026-11-09), measured with pySurf's breaking tracker under decision 14 of the GPU SPH roadmap. A cross-check: no measurement exists for this tank.",
   "tank": "Flat at h0 offshore; the 0.0693 face from the toe at x = 30 + y tan 25 h0 to a shelf 0.371 h0 deep; the shelf to an end wall at x = 52 h0; 4 h0 across between free-slip walls (mDBC slip mode 3). A piston tuned so the gauge at x = 20 h0 reads H/h0 = 0.6 within 0.8 percent.",
   "times": "seconds after the crest passes the gauge at x = 20 h0, with h0 = 1 m",
   "columns": ["breakingTime_s", "crestPastShelfEdge_h0", "breakingHeight_h0", "touchdownTime_s", "impactHeight_h0", "overturnAreaOverImpactHeightSquared", "jetAreaOverImpactHeightSquared", "overturnAngle_deg"],

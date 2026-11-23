@@ -1,0 +1,86 @@
+{
+ "source": "DualSPHysics v5.4 (commit ef3721a; Dominguez et al. 2022), pySurf's reference run, written, run and measured with pySurf's breaking tracker by dualSphysics/tools/gateRuns.py (in the repository's history to commit 27c0a03), recorded 2026-11-10. A cross-check: it validates neither code.",
+ "case": "Soliton of H0/h0 = 0.6 over the Surf Ranch reef of Feddersen et al. (2024): the 0.0693 face to a shelf 0.371 h0 deep, 2D, mDBC walls in slip mode 1; overturn measures at touchdown and the surface gap against pySurf's boundary element model 0.1 sqrt(h0/g) before its impact, 64 ppd",
+ "note": "Times in seconds from the crest's passage of the tuning gauge, as pySurf's count from its starting crest; h0 = 1 m. runWall is the solver's wall time in seconds; fluidParticles and wallClockSeconds in the summary fields are placeholders.",
+ "record": {
+  "slopeParameter": 0.1360776571673322,
+  "predictedBreakerType": "plunging",
+  "particlesPerDepth": 64,
+  "fluidParticles": 0,
+  "wallClockSeconds": 0.0,
+  "broke": true,
+  "breakingTime": 6.373150919606002,
+  "breakingIndex": 1.6591802697266425,
+  "breakingHeightOverDepth": 0.6155558800685843,
+  "breakingDepthOverDepth": 0.371,
+  "breakingDistanceFromToe": 9.9375,
+  "breakingFaceDepthOverDepth": 0.371,
+  "maxRunupOverDepth": -0.371,
+  "touchedDown": true,
+  "touchdownTime": 6.793078876812677,
+  "jetTipX": 41.84663510455045,
+  "impactX": 41.84139094568591,
+  "impactHeightOverDepth": 0.5646903628578479,
+  "cavityAreaOverDepthSquared": 0.05574642548072006,
+  "pocketAreaOverDepthSquared": 0.055819104260081076,
+  "overturnAreaOverImpactHeightSquared": 0.17482207599862964,
+  "jetAreaOverImpactHeightSquared": 0.12359312107913133,
+  "overturnAspectRatio": 0.3940469406052789,
+  "overturnAngle": 39.71368750354744,
+  "surfaceGapLargest": 41.70718083514231,
+  "surfaceGapRms": 19.37486002884871,
+  "surfaceGapSphToBem": 36.03022042980187,
+  "surfaceGapBemToSph": 41.70718083514231,
+  "surfaceGapTime": 6.280586718872182,
+  "compareTime": 6.281894949701559,
+  "framesRead": 1254,
+  "lastTime": 9.000013025523451,
+  "tuning": {
+   "paddleHeight": 0.6107408710556812,
+   "gaugeHeight": 0.6041461538461538,
+   "gaugeError": 0.006910256410256332,
+   "passage": 4.945752538461538,
+   "history": [
+    {
+     "paddleHeight": 0.67,
+     "gaugeHeight": 0.6865869423076923,
+     "passage": 4.822328892307693,
+     "wall": 597.6239726999775
+    },
+    {
+     "paddleHeight": 0.5855048723310043,
+     "gaugeHeight": 0.5764822413541411,
+     "passage": 5.021423603329404,
+     "wall": 588.5812959999312
+    },
+    {
+     "paddleHeight": 0.6035525669531329,
+     "gaugeHeight": 0.593301125,
+     "passage": 5.003366025,
+     "wall": 650.8243142000865
+    },
+    {
+     "paddleHeight": 0.6107408710556812,
+     "gaugeHeight": 0.6041461538461538,
+     "passage": 4.945752538461538,
+     "wall": 756.2372141000815
+    }
+   ],
+   "withinTwoPercent": true
+  },
+  "gaugeHeight": 0.6041461538461538,
+  "passage": 4.945752538461538,
+  "runWall": 1407.5372436000034,
+  "window": [
+   5.000007122672483,
+   9.000013025523451
+  ],
+  "criteriaPassed": {
+   "impactX": true,
+   "impactHeightOverDepth": false,
+   "overturnAreaOverImpactHeightSquared": false,
+   "jetAreaOverImpactHeightSquared": false,
+   "overturnAngle": false
+  }
+ }
+}

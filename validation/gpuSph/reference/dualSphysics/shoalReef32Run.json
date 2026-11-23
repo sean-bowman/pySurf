@@ -1,0 +1,256 @@
+{
+ "source": "DualSPHysics v5.4 (commit ef3721a; Dominguez et al. 2022), pySurf's reference run, written, run and measured with pySurf's breaking tracker by dualSphysics/tools/reefRuns.py (in the repository's history to commit 27c0a03), recorded 2026-11-10. A cross-check: it validates neither code.",
+ "case": "The Surf Ranch reef turned 25 degrees: toe along x = 30 + y tan 25 h0, the 0.0693 face to a shelf 0.371 h0 deep, an end wall at x = 52 h0, 4 h0 across between free-slip walls (slip mode 3), H0/h0 = 0.6; two-row sections every 0.5 h0, 32 ppd; the run record behind shoalReef32.json",
+ "note": "Times in seconds from the crest's passage of the tuning gauge, as pySurf's count from its starting crest; h0 = 1 m. runWall is the solver's wall time in seconds; fluidParticles and wallClockSeconds in the summary fields are placeholders.",
+ "record": {
+  "particlesPerDepth": 32,
+  "angle": 25.0,
+  "sliceCentres": [
+   0.0,
+   0.5,
+   1.0,
+   1.5,
+   2.0,
+   2.5,
+   3.0,
+   3.5,
+   4.0
+  ],
+  "tuning": {
+   "paddleHeight": 0.6326190093850981,
+   "gaugeHeight": 0.6053481347799468,
+   "gaugeError": 0.008913557966578,
+   "passage": 4.911416291941649,
+   "history": [
+    {
+     "paddleHeight": 0.6121,
+     "gaugeHeight": 0.5745900002045504,
+     "passage": 4.974098500000003,
+     "wall": 3810.777538599912
+    },
+    {
+     "paddleHeight": 0.6391687983940857,
+     "gaugeHeight": 0.6081110220408341,
+     "passage": 4.912963148191126,
+     "wall": 3923.771204199991
+    },
+    {
+     "paddleHeight": 0.6326190093850981,
+     "gaugeHeight": 0.6053481347799468,
+     "passage": 4.911416291941649,
+     "wall": 3769.3021695000352
+    }
+   ],
+   "withinTwoPercent": true
+  },
+  "runWall": 27326.88716559997,
+  "gaugeHeight": 0.6047050061399569,
+  "passage": 4.912410348790988,
+  "gaugeWithinTwoPercent": true,
+  "sections": [
+   {
+    "y": 0.0,
+    "slice": [
+     0.0,
+     0.0625
+    ],
+    "againstWall": true,
+    "broke": true,
+    "breakingTime": 4.749051030481621,
+    "breakingHeightOverDepth": 0.6045487701171863,
+    "breakingDepthOverDepth": 0.39037656249999986,
+    "breakingDistanceFromToe": 8.796875,
+    "touchedDown": true,
+    "touchdownTime": 4.7602244288850954,
+    "impactX": 39.390503029165004,
+    "impactHeightOverDepth": 0.606806866583181,
+    "overturnAreaOverImpactHeightSquared": 0.012155302998303502,
+    "jetAreaOverImpactHeightSquared": 0.007612996819477154,
+    "overturnAngle": 23.19642475727739,
+    "breakingCrestX": 38.796875,
+    "crestSpeed": 4.058805993637639
+   },
+   {
+    "y": 0.5,
+    "slice": [
+     0.46875,
+     0.53125
+    ],
+    "againstWall": false,
+    "broke": true,
+    "breakingTime": 5.148197469144912,
+    "breakingHeightOverDepth": 0.6393813962005872,
+    "breakingDepthOverDepth": 0.371,
+    "breakingDistanceFromToe": 10.282471170922502,
+    "touchedDown": true,
+    "touchdownTime": 5.6319033245530274,
+    "impactX": 42.84479442441597,
+    "impactHeightOverDepth": 0.593393460361133,
+    "overturnAreaOverImpactHeightSquared": 0.14492097882447616,
+    "jetAreaOverImpactHeightSquared": 0.1286978457540935,
+    "overturnAngle": 43.97683118205484,
+    "breakingCrestX": 40.515625,
+    "crestSpeed": 4.165378964487467
+   },
+   {
+    "y": 1.0,
+    "slice": [
+     0.96875,
+     1.03125
+    ],
+    "againstWall": false,
+    "broke": true,
+    "breakingTime": 5.221586308597902,
+    "breakingHeightOverDepth": 0.6414384342677402,
+    "breakingDepthOverDepth": 0.371,
+    "breakingDistanceFromToe": 10.361817341845,
+    "touchedDown": true,
+    "touchdownTime": 5.6447407156108875,
+    "impactX": 42.877925475690525,
+    "impactHeightOverDepth": 0.5943044764838699,
+    "overturnAreaOverImpactHeightSquared": 0.15532092602437958,
+    "jetAreaOverImpactHeightSquared": 0.1392101049065145,
+    "overturnAngle": 43.112604941663776,
+    "breakingCrestX": 40.828125,
+    "crestSpeed": 4.186739684017951
+   },
+   {
+    "y": 1.5,
+    "slice": [
+     1.46875,
+     1.53125
+    ],
+    "againstWall": false,
+    "broke": true,
+    "breakingTime": 5.304693624969343,
+    "breakingHeightOverDepth": 0.6385358950019839,
+    "breakingDepthOverDepth": 0.371,
+    "breakingDistanceFromToe": 10.425538512767503,
+    "touchedDown": true,
+    "touchdownTime": 5.714921335461052,
+    "impactX": 43.18968806935333,
+    "impactHeightOverDepth": 0.5800244806949539,
+    "overturnAreaOverImpactHeightSquared": 0.1674042898072786,
+    "jetAreaOverImpactHeightSquared": 0.16976279443164616,
+    "overturnAngle": 36.32851140388878,
+    "breakingCrestX": 41.125,
+    "crestSpeed": 4.194873851547361
+   },
+   {
+    "y": 2.0,
+    "slice": [
+     1.96875,
+     2.03125
+    ],
+    "againstWall": false,
+    "broke": true,
+    "breakingTime": 5.336558065261383,
+    "breakingHeightOverDepth": 0.6348527668885524,
+    "breakingDepthOverDepth": 0.371,
+    "breakingDistanceFromToe": 10.364259683690001,
+    "touchedDown": true,
+    "touchdownTime": 5.762848350133822,
+    "impactX": 43.28576850567599,
+    "impactHeightOverDepth": 0.5828057950822241,
+    "overturnAreaOverImpactHeightSquared": 0.13857910706901874,
+    "jetAreaOverImpactHeightSquared": 0.15992370997701502,
+    "overturnAngle": 43.015588189674105,
+    "breakingCrestX": 41.296875,
+    "crestSpeed": 4.156527810435933
+   },
+   {
+    "y": 2.5,
+    "slice": [
+     2.46875,
+     2.53125
+    ],
+    "againstWall": false,
+    "broke": true,
+    "breakingTime": 5.371627740736703,
+    "breakingHeightOverDepth": 0.6281850717430926,
+    "breakingDepthOverDepth": 0.371,
+    "breakingDistanceFromToe": 10.193605854612503,
+    "touchedDown": true,
+    "touchdownTime": 5.778836093041518,
+    "impactX": 43.225131074193804,
+    "impactHeightOverDepth": 0.5813080969769242,
+    "overturnAreaOverImpactHeightSquared": 0.12430985297445118,
+    "jetAreaOverImpactHeightSquared": 0.12462124392596174,
+    "overturnAngle": 34.22913399846104,
+    "breakingCrestX": 41.359375,
+    "crestSpeed": 4.162532037875067
+   },
+   {
+    "y": 3.0,
+    "slice": [
+     2.96875,
+     3.03125
+    ],
+    "againstWall": false,
+    "broke": true,
+    "breakingTime": 5.445120309145852,
+    "breakingHeightOverDepth": 0.6298171946448532,
+    "breakingDepthOverDepth": 0.371,
+    "breakingDistanceFromToe": 10.163577025535005,
+    "touchedDown": true,
+    "touchdownTime": 5.9097643014298376,
+    "impactX": 43.77019311017568,
+    "impactHeightOverDepth": 0.5588195727867267,
+    "overturnAreaOverImpactHeightSquared": 0.15088288211058273,
+    "jetAreaOverImpactHeightSquared": 0.10928086308551006,
+    "overturnAngle": 46.53081875353639,
+    "breakingCrestX": 41.5625,
+    "crestSpeed": 4.101126370592294
+   },
+   {
+    "y": 3.5,
+    "slice": [
+     3.46875,
+     3.53125
+    ],
+    "againstWall": false,
+    "broke": true,
+    "breakingTime": 5.448372912092103,
+    "breakingHeightOverDepth": 0.6073932502996859,
+    "breakingDepthOverDepth": 0.371,
+    "breakingDistanceFromToe": 9.899173196457504,
+    "touchedDown": true,
+    "touchdownTime": 5.884208193747437,
+    "impactX": 43.71270432518315,
+    "impactHeightOverDepth": 0.5661386700747959,
+    "overturnAreaOverImpactHeightSquared": 0.14970784369897483,
+    "jetAreaOverImpactHeightSquared": 0.12998078181235023,
+    "overturnAngle": 41.096487889954915,
+    "breakingCrestX": 41.53125,
+    "crestSpeed": 4.104586689225126
+   },
+   {
+    "y": 4.0,
+    "slice": [
+     3.9375,
+     4.0
+    ],
+    "againstWall": true,
+    "broke": true,
+    "breakingTime": 5.1097892361123725,
+    "breakingHeightOverDepth": 0.5888404394105144,
+    "breakingDepthOverDepth": 0.43084642034056575,
+    "breakingDistanceFromToe": 8.212894367380006,
+    "touchedDown": true,
+    "touchdownTime": 5.111425819541153,
+    "impactX": 40.63513642918132,
+    "impactHeightOverDepth": 0.5888404394105144,
+    "overturnAreaOverImpactHeightSquared": 0.017384367190713904,
+    "jetAreaOverImpactHeightSquared": 0.011780580530907588,
+    "overturnAngle": 35.30675712187797,
+    "breakingCrestX": 40.078125,
+    "crestSpeed": 4.039052032042693
+   }
+  ],
+  "framesRead": 1566,
+  "peelSpeed": 9.897291243955156,
+  "peelSections": 7,
+  "crestSpeed": 4.153109344025885,
+  "peelSpeedFromCrest": 8.906371729896424
+ }
+}

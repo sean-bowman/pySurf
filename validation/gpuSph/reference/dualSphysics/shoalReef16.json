@@ -1,0 +1,176 @@
+{
+ "source": "DualSPHysics v5.4 (commit ef3721a; Dominguez et al. 2022), pySurf's reference run, written, run and measured with pySurf's breaking tracker by dualSphysics/tools/reefRuns.py (in the repository's history to commit 27c0a03), recorded 2026-11-10. A cross-check: it validates neither code.",
+ "case": "The Surf Ranch reef turned 25 degrees: toe along x = 30 + y tan 25 h0, the 0.0693 face to a shelf 0.371 h0 deep, an end wall at x = 52 h0, 4 h0 across between free-slip walls (slip mode 3), H0/h0 = 0.6; two-row sections every 0.5 h0, 16 ppd; the gauge missed the 2 percent tune",
+ "note": "Times in seconds from the crest's passage of the tuning gauge, as pySurf's count from its starting crest; h0 = 1 m. runWall is the solver's wall time in seconds; fluidParticles and wallClockSeconds in the summary fields are placeholders.",
+ "record": {
+  "particlesPerDepth": 16,
+  "angle": 25.0,
+  "tuning": {
+   "paddleHeight": 0.6742107132254946,
+   "gaugeHeight": 0.5888200000775423,
+   "gaugeError": -0.018633333204096103,
+   "passage": 4.7880465,
+   "history": [
+    {
+     "paddleHeight": 0.6121,
+     "gaugeHeight": 0.5237408333333333,
+     "passage": 4.964508333333333,
+     "wall": 499.9743233000627
+    },
+    {
+     "paddleHeight": 0.7012246833277909,
+     "gaugeHeight": 0.633167592857616,
+     "passage": 4.715049499999995,
+     "wall": 520.0177940001013
+    },
+    {
+     "paddleHeight": 0.6742107132254946,
+     "gaugeHeight": 0.5888200000775423,
+     "passage": 4.7880465,
+     "wall": 524.4367280000588
+    },
+    {
+     "paddleHeight": 0.6810209178998878,
+     "gaugeHeight": 0.587801235688828,
+     "passage": 4.761891222513951,
+     "wall": 509.99951400002465
+    },
+    {
+     "paddleHeight": 0.6951542901421276,
+     "gaugeHeight": 0.613862538661959,
+     "passage": 4.720651498461537,
+     "wall": 544.2088266999926
+    }
+   ],
+   "withinTwoPercent": true
+  },
+  "runWall": 2685.7862470999826,
+  "gaugeHeight": 0.5632201785714286,
+  "passage": 4.814334642857142,
+  "gaugeWithinTwoPercent": false,
+  "sliceCentres": [
+   0.0,
+   1.0,
+   2.0,
+   3.0,
+   4.0
+  ],
+  "sections": [
+   {
+    "y": 0.0,
+    "slice": [
+     0.0,
+     0.125
+    ],
+    "againstWall": true,
+    "broke": true,
+    "breakingTime": 5.253942802112757,
+    "breakingHeightOverDepth": 0.5486293007046852,
+    "breakingDepthOverDepth": 0.371,
+    "breakingDistanceFromToe": 10.71875,
+    "touchedDown": true,
+    "touchdownTime": 5.255507195400592,
+    "impactX": 41.461532397946726,
+    "impactHeightOverDepth": 0.5486293007046852,
+    "overturnAreaOverImpactHeightSquared": 0.05706974558536815,
+    "jetAreaOverImpactHeightSquared": 0.04613867993470065,
+    "overturnAngle": 14.85283474322499,
+    "breakingCrestX": 40.71875,
+    "crestSpeed": 4.031505335992484
+   },
+   {
+    "y": 1.0,
+    "slice": [
+     0.9375,
+     1.0625
+    ],
+    "againstWall": false,
+    "broke": true,
+    "breakingTime": 6.665193097277678,
+    "breakingHeightOverDepth": 0.4476315858848756,
+    "breakingDepthOverDepth": 0.371,
+    "breakingDistanceFromToe": 15.877442341845,
+    "touchedDown": true,
+    "touchdownTime": 6.666791493151782,
+    "impactX": 46.44125378082288,
+    "impactHeightOverDepth": 0.4476315858848756,
+    "overturnAreaOverImpactHeightSquared": 0.10617173726159557,
+    "jetAreaOverImpactHeightSquared": 0.05689249941116118,
+    "overturnAngle": -88.38395627498886,
+    "breakingCrestX": 46.34375,
+    "crestSpeed": 3.52484728613887
+   },
+   {
+    "y": 2.0,
+    "slice": [
+     1.9375,
+     2.0625
+    ],
+    "againstWall": false,
+    "broke": true,
+    "breakingTime": 5.684933606317488,
+    "breakingHeightOverDepth": 0.6024768233916702,
+    "breakingDepthOverDepth": 0.371,
+    "breakingDistanceFromToe": 11.536134683690001,
+    "touchedDown": false,
+    "touchdownTime": null,
+    "impactX": null,
+    "impactHeightOverDepth": null,
+    "overturnAreaOverImpactHeightSquared": null,
+    "jetAreaOverImpactHeightSquared": null,
+    "overturnAngle": null,
+    "breakingCrestX": 42.46875,
+    "crestSpeed": 4.050788853120352
+   },
+   {
+    "y": 3.0,
+    "slice": [
+     2.9375,
+     3.0625
+    ],
+    "againstWall": false,
+    "broke": true,
+    "breakingTime": 5.819009307673388,
+    "breakingHeightOverDepth": 0.5689586151036266,
+    "breakingDepthOverDepth": 0.371,
+    "breakingDistanceFromToe": 11.694827025535005,
+    "touchedDown": false,
+    "touchdownTime": null,
+    "impactX": null,
+    "impactHeightOverDepth": null,
+    "overturnAreaOverImpactHeightSquared": null,
+    "jetAreaOverImpactHeightSquared": null,
+    "overturnAngle": null,
+    "breakingCrestX": 43.09375,
+    "crestSpeed": 3.9675711057882745
+   },
+   {
+    "y": 4.0,
+    "slice": [
+     3.875,
+     4.0
+    ],
+    "againstWall": true,
+    "broke": true,
+    "breakingTime": 5.560467361757448,
+    "breakingHeightOverDepth": 0.5318011397007949,
+    "breakingDepthOverDepth": 0.371,
+    "breakingDistanceFromToe": 10.134769367380006,
+    "touchedDown": true,
+    "touchdownTime": 5.565158176490278,
+    "impactX": 42.37453350692173,
+    "impactHeightOverDepth": 0.5310154221572063,
+    "overturnAreaOverImpactHeightSquared": 0.11269716438652642,
+    "jetAreaOverImpactHeightSquared": 0.04132837886753088,
+    "overturnAngle": -142.45450096803944,
+    "breakingCrestX": 42.0,
+    "crestSpeed": 4.276953672975664
+   }
+  ],
+  "framesRead": 1558,
+  "peelSpeed": -2.3635527229081963,
+  "peelSections": 3,
+  "crestSpeed": 3.847735748349166,
+  "peelSpeedFromCrest": 8.251495940626812
+ }
+}
