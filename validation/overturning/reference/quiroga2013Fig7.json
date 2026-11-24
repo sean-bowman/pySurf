@@ -1,0 +1,278 @@
+{
+ "source": "Quiroga, P.D. & Cheung, K.F. (2013), Coastal Engineering 80, 35-48, figure 7: the maximum surface elevation along the 1:12 reef face over H0 for the control tests (smooth concrete) at hf = 0.1 m, panels for nominal H0/h0 = 0.1 to 0.5; digitized 2026-11-23 from the figure embedded in the published PDF (901 px wide). The control crosses lie under other markers at most gauges, so each gauge's value is read from the blue line through them: a straight line fitted to its pixels between each pair of gauges, clear of the markers, evaluated at the gauge (two estimates averaged, their spread given). WG2, at 28.60 m, lies left of the plot (30 m) and is extrapolated from the WG2-WG3 segment. Panel frames span 0.6 to 1.4; x from the bottom ticks, 30 m at the left edge and 5 m apart.",
+ "definitions": {
+  "etaMaxOverH0": "the largest surface elevation over still water as the wave passes the gauge, over H0 at WG1",
+  "videoBreaking": "the filled black circles: the breaking point from video, its elevation over H0 and its position along the flume"
+ },
+ "gaugesX_m": {
+  "WG2": 28.6,
+  "WG3": 35.91,
+  "WG4": 40.58,
+  "WG5": 44.25,
+  "WG6": 46.1,
+  "WG7": 48.23,
+  "WG8": 50.37,
+  "WG9": 54.41
+ },
+ "gaugeSource": "Quiroga (2012), MS thesis, table 1, from the wavemaker",
+ "measuredIncidentHeight": {
+  "0.1": null,
+  "0.2": 0.2108,
+  "0.3": 0.3206,
+  "0.4": 0.4105,
+  "0.5": 0.5102
+ },
+ "measuredIncidentHeightNote": "H0/h0 the same tests read in figures 11 and 12 (quiroga2013Fig11Fig12.json); figure 7 labels the panels by the nominal height; the paper gives the recorded height 6 percent over the target at 0.1, which figures 11 and 12 do not plot",
+ "digitizingError": {
+  "etaMaxOverH0": 0.005,
+  "videoBreakingX_m": 0.1
+ },
+ "consistency": "Figure 7's video points stand 4 to 5 percent higher than figure 12's breaking heights for the same tests (1.119, 1.128, 1.071 against 1.067, 1.080, 1.029 at 0.3, 0.4, 0.5), and further offshore than figure 11's breaking depths place them. The paper does not say why.",
+ "panels": {
+  "0.1": {
+   "gauges": {
+    "WG2": {
+     "etaMaxOverH0": 1.0697,
+     "spread": 0.0
+    },
+    "WG3": {
+     "etaMaxOverH0": 1.1159,
+     "spread": 0.0001
+    },
+    "WG4": {
+     "etaMaxOverH0": 1.1803,
+     "spread": 0.0
+    },
+    "WG5": {
+     "etaMaxOverH0": 1.2566,
+     "spread": 0.0003
+    },
+    "WG6": {
+     "etaMaxOverH0": 1.2971,
+     "spread": 0.0004
+    },
+    "WG7": {
+     "etaMaxOverH0": 1.3263,
+     "spread": 0.0018
+    },
+    "WG8": {
+     "etaMaxOverH0": 1.3369,
+     "spread": 0.0028
+    },
+    "WG9": {
+     "etaMaxOverH0": 1.2001,
+     "spread": 0.0
+    }
+   },
+   "segmentResidualPx": [
+    0.27,
+    0.27,
+    0.26,
+    0.26,
+    0.26,
+    0.24,
+    0.23
+   ],
+   "videoBreaking": []
+  },
+  "0.2": {
+   "gauges": {
+    "WG2": {
+     "etaMaxOverH0": 1.0533,
+     "spread": 0.0
+    },
+    "WG3": {
+     "etaMaxOverH0": 1.087,
+     "spread": 0.0003
+    },
+    "WG4": {
+     "etaMaxOverH0": 1.1229,
+     "spread": 0.0001
+    },
+    "WG5": {
+     "etaMaxOverH0": 1.183,
+     "spread": 0.0001
+    },
+    "WG6": {
+     "etaMaxOverH0": 1.2061,
+     "spread": 0.0004
+    },
+    "WG7": {
+     "etaMaxOverH0": 1.2185,
+     "spread": 0.0007
+    },
+    "WG8": {
+     "etaMaxOverH0": 1.2179,
+     "spread": 0.002
+    },
+    "WG9": {
+     "etaMaxOverH0": 1.1184,
+     "spread": 0.0
+    }
+   },
+   "segmentResidualPx": [
+    0.27,
+    0.28,
+    0.28,
+    0.27,
+    0.24,
+    0.0,
+    0.27
+   ],
+   "videoBreaking": []
+  },
+  "0.3": {
+   "gauges": {
+    "WG2": {
+     "etaMaxOverH0": 1.0285,
+     "spread": 0.0
+    },
+    "WG3": {
+     "etaMaxOverH0": 1.0475,
+     "spread": 0.0003
+    },
+    "WG4": {
+     "etaMaxOverH0": 1.0772,
+     "spread": 0.0001
+    },
+    "WG5": {
+     "etaMaxOverH0": 1.1305,
+     "spread": 0.0008
+    },
+    "WG6": {
+     "etaMaxOverH0": 1.1619,
+     "spread": 0.0019
+    },
+    "WG7": {
+     "etaMaxOverH0": 1.1778,
+     "spread": 0.001
+    },
+    "WG8": {
+     "etaMaxOverH0": 1.1877,
+     "spread": 0.0038
+    },
+    "WG9": {
+     "etaMaxOverH0": 0.96,
+     "spread": 0.0
+    }
+   },
+   "segmentResidualPx": [
+    0.28,
+    0.27,
+    0.28,
+    0.29,
+    0.27,
+    0.26,
+    0.17
+   ],
+   "videoBreaking": [
+    {
+     "x_m": 53.023,
+     "etaOverH0": 1.119
+    }
+   ]
+  },
+  "0.4": {
+   "gauges": {
+    "WG2": {
+     "etaMaxOverH0": 1.0203,
+     "spread": 0.0
+    },
+    "WG3": {
+     "etaMaxOverH0": 1.0335,
+     "spread": 0.001
+    },
+    "WG4": {
+     "etaMaxOverH0": 1.0396,
+     "spread": 0.0007
+    },
+    "WG5": {
+     "etaMaxOverH0": 1.1021,
+     "spread": 0.0002
+    },
+    "WG6": {
+     "etaMaxOverH0": 1.1268,
+     "spread": 0.0002
+    },
+    "WG7": {
+     "etaMaxOverH0": 1.1532,
+     "spread": 0.0001
+    },
+    "WG8": {
+     "etaMaxOverH0": 1.16,
+     "spread": 0.0034
+    },
+    "WG9": {
+     "etaMaxOverH0": 0.8375,
+     "spread": 0.0
+    }
+   },
+   "segmentResidualPx": [
+    0.29,
+    0.26,
+    0.25,
+    0.25,
+    0.29,
+    0.29,
+    0.14
+   ],
+   "videoBreaking": [
+    {
+     "x_m": 52.251,
+     "etaOverH0": 1.1283
+    }
+   ]
+  },
+  "0.5": {
+   "gauges": {
+    "WG2": {
+     "etaMaxOverH0": 0.9884,
+     "spread": 0.0
+    },
+    "WG3": {
+     "etaMaxOverH0": 0.9787,
+     "spread": 0.0013
+    },
+    "WG4": {
+     "etaMaxOverH0": 1.0052,
+     "spread": 0.0002
+    },
+    "WG5": {
+     "etaMaxOverH0": 1.056,
+     "spread": 0.0011
+    },
+    "WG6": {
+     "etaMaxOverH0": 1.0863,
+     "spread": 0.001
+    },
+    "WG7": {
+     "etaMaxOverH0": 1.1073,
+     "spread": 0.0011
+    },
+    "WG8": {
+     "etaMaxOverH0": 1.0866,
+     "spread": 0.0094
+    },
+    "WG9": {
+     "etaMaxOverH0": 0.7512,
+     "spread": 0.0
+    }
+   },
+   "segmentResidualPx": [
+    0.24,
+    0.28,
+    0.29,
+    0.26,
+    0.27,
+    0.26,
+    0.51
+   ],
+   "videoBreaking": [
+    {
+     "x_m": 51.029,
+     "etaOverH0": 1.0709
+    }
+   ]
+  }
+ }
+}

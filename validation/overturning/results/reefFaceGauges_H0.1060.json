@@ -1,0 +1,70 @@
+{
+ "nominal": "0.1",
+ "incidentHeightOverDepth": 0.106,
+ "gauges": {
+  "WG2": {
+   "x_h0": 26.564452175471512,
+   "etaMaxOverH0": 1.0540873712153334
+  },
+  "WG3": {
+   "x_h0": 29.535996890918664,
+   "etaMaxOverH0": 1.1059515485063411
+  },
+  "WG4": {
+   "x_h0": 31.434370874658505,
+   "etaMaxOverH0": 1.1497317034732428
+  },
+  "WG5": {
+   "x_h0": 32.92624079335769,
+   "etaMaxOverH0": 1.1908303933357278
+  },
+  "WG6": {
+   "x_h0": 33.678273313682894,
+   "etaMaxOverH0": 1.213859938156418
+  },
+  "WG7": {
+   "x_h0": 34.54412697221948,
+   "etaMaxOverH0": 1.2416318232689676
+  },
+  "WG8": {
+   "x_h0": 35.41404567140647,
+   "etaMaxOverH0": 1.2689350358310252
+  },
+  "WG9": {
+   "x_h0": 37.056322094170696,
+   "etaMaxOverH0": 1.2538807017399312
+  }
+ },
+ "summary": {
+  "slopeParameter": 0.3893095302935165,
+  "predictedBreakerType": "none",
+  "surfaceNodes": 615,
+  "endTime": 8.735901312255125,
+  "touchedDown": true,
+  "stopReason": "the jet touched down",
+  "trimmedLoops": 0,
+  "wallClockSeconds": 1771.913678500001,
+  "broke": true,
+  "breakingTime": 8.531517843048643,
+  "breakingIndex": 1.73344338888081,
+  "breakingHeightOverDepth": 0.13640518407211277,
+  "breakingDepthOverDepth": 0.07869030217374573,
+  "breakingDistanceFromToe": 11.055716373915054,
+  "breakingFaceDepthOverDepth": 0.04065040650406504,
+  "jetTipX": 38.3904726723861,
+  "impactX": 38.38629608765894,
+  "impactHeightOverDepth": 0.13335108348078917,
+  "cavityAreaOverDepthSquared": 0.0032458721940429314,
+  "tubeLengthOverDepth": 0.08715273222676956,
+  "tubeHeightOverDepth": 0.06607873062801661,
+  "tubeRatio": 1.3189226154689149,
+  "overturnAreaOverImpactHeightSquared": 0.1825317082089446,
+  "jetAreaOverImpactHeightSquared": 0.15231859175214665,
+  "overturnAspectRatio": 0.5075579853197706,
+  "overturnAngle": 36.580418779422416,
+  "overturnFitErrorOverLength": 0.01365205156390615
+ },
+ "breakingCrestX_m": 53.677062279831034,
+ "frames": 352,
+ "wallSeconds": 1781.8635368999967
+}

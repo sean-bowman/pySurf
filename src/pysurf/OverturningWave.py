@@ -88,10 +88,12 @@ Breaking on a steep reef face: fails against Quiroga and Cheung's (2013) flume, 
 a 1:12 face to flats 0.1, 0.2 and 0.3 m deep, H0/h0 = 0.21 to 0.51, read from their video with
 the same breaking definition (validation/overturning/reefFaceBreaking.py). Every breaking height
 is high, +2.5 to +23.7 percent, 11 of 16 beyond the 10 percent criterion, and where the flume's
-wave breaks on the face the model breaks deeper, 5 of 9 beyond 15 percent. The flume's waves grow
-by 1.01 to 1.08 times H0 from the gauge to breaking, the model's by 1.13 to 1.20, so the gap opens
-before breaking; the model starts from the exact solitary wave of the flume's gauge height, where
-the flume's piston made a wave of its own shape, and that difference is untested.
+wave breaks on the face the model breaks deeper, 5 of 9 beyond 15 percent. The flume's own gauges
+up the face point at the reference rather than the model (validation/overturning/reefFaceGauges.py):
+on the 0.1 m flat the model's largest elevation there lies within -0.085 to +0.043 H0 of theirs,
+and its crest at breaking within -4.1 to +2.0 percent of the largest they recorded before breaking,
+while the video's breaking heights sit 7 to 14 percent below those same readings. The paper's two
+figures of the video breaking points also differ from each other by about 5 percent.
 
 Not validated: a solitary wave over a reef. Blenkinsopp and Chaplin (2008) measured overturns over
 a 1:10 reef under periodic waves; `pysurf.ReefOverturn` runs them, handing this model waves from an

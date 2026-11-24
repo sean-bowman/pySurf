@@ -36,7 +36,23 @@ python reefFaceBreaking.py report
 | Breaking depth h_b/h0 under the front, the 9 cases that break on the face | 15 percent | +1.4 to +28.8 percent, deeper, 5 of 9 beyond: fails |
 | Growth from the gauge to breaking, H_b/H0 | Reported | Flume 0.96 to 1.14 (mostly 1.01 to 1.08); model 1.13 to 1.20 |
 
-The error has one sign: the model's wave breaks higher and further offshore, and it is already the larger wave before it breaks. The flume's wave came from a piston, with trailing waves and a shape of its own, where the model starts from the exact solitary wave of the same gauge height; that difference is the first suspect and is not yet tested.
+The error has one sign: the model's wave breaks higher and further offshore than the video reads it.
+
+```bash
+python reefFaceGauges.py run --workers 5      # 5 runs, 29 to 43 minutes each on one thread
+python reefFaceGauges.py report
+```
+
+`reefFaceGauges.py` reads the same waves on the 0.1 m flat at the flume's gauges up the face, against the paper's figure 7 (`reference/quiroga2013Fig7.json`, the line through the control crosses digitized). Set before the runs, the waves part early if the model exceeds the flume by 0.03 H0 at WG3 in three of the four breaking cases, late if they agree within 0.03 through WG6 and part by WG8; they part gradually, one case early and none late.
+
+| Reading, hf 0.1 m, nominal H0/h0 = 0.1 to 0.5 | Result |
+| --- | --- |
+| Largest elevation, model less flume, WG2 to WG4 | -0.031 to +0.013 H0 for 0.1 to 0.4; +0.030 to +0.040 at 0.5 |
+| The same, WG5 to WG8 | -0.085 to +0.005 H0 for 0.1 to 0.4, below the flume at all but one gauge; +0.007 to +0.043 at 0.5 |
+| Model crest at breaking against the flume's largest gauge reading before breaking | -4.1 to +2.0 percent |
+| The video's breaking heights against those same gauge readings | 7 to 14 percent below (figure 12), 3 to 6 percent below (figure 7) |
+
+The model's wave is not the larger one up the face, so the incident wave's shape does not explain the failure. The model's crest at breaking agrees with the largest elevations the flume's gauges recorded, and the video's breaking heights fall below them. The paper allows that the breaking height is not the largest the wave reaches, and its two figures of the video points differ by about 5 percent. The failure therefore lies in the reference's breaking heights, or in the last few metres before breaking, which no gauge covers, rather than in the shoaling.
 
 Each script's docstring holds its criteria and recorded result; each run's record is in `results/`.
 

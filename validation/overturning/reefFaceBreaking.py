@@ -28,12 +28,14 @@ reach breaking is reported, not counted.
 Recorded (2026-11-23): fails. No flat depth validates; 2 of the 16 cases pass both criteria (hf
 0.3 m at H0/h0 = 0.40 and 0.45). Every breaking height is high, +2.5 to +23.7 percent (mean +12.7),
 11 of 16 beyond 10 percent; where h_b is judged the model breaks deeper, +1.4 to +28.8 percent, 5
-of 9 beyond 15. From WG1 to breaking the flume's waves grow by 0.96 to 1.14 times H0 (mostly 1.01
-to 1.08), the model's by 1.13 to 1.20: the model's wave is the larger one well before it breaks,
-where potential flow has nothing to dissipate. No breaking angle closes both gaps: reading breaking
-earlier than the face first vertical, as "near vertical" might, lowers the model's H_b toward the
-flume's but moves its h_b further offshore, away from it. Every run lands its jet; each takes 20 to
-80 minutes on one thread.
+of 9 beyond 15. From WG1 to breaking the video's heights grow by 0.96 to 1.14 times H0 (mostly 1.01
+to 1.08), the model's by 1.13 to 1.20. No breaking angle closes both gaps: reading breaking earlier
+than the face first vertical, as "near vertical" might, lowers the model's H_b toward the flume's
+but moves its h_b further offshore, away from it. The flume's own gauges up the face do not support
+a larger model wave (reefFaceGauges.py): on the 0.1 m flat the model's crest at breaking lies within
+-4.1 to +2.0 percent of the largest elevation those gauges recorded before breaking, and the video's
+breaking heights sit 7 to 14 percent below the same gauge readings. Every run lands its jet; each
+takes 20 to 80 minutes on one thread.
 
     python reefFaceBreaking.py run [--workers 9]
     python reefFaceBreaking.py report
