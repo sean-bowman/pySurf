@@ -84,6 +84,15 @@ The overturn is converged in resolution: on the 1:35 slope the tube is 0.255 d l
 and 0.0350 d^2 in area at a crest spacing of 0.02 d, against 0.258 d, 0.282 d and 0.0350 d^2 at
 0.014 d, and the Surf Ranch measures agree to 1.5 percent between the two spacings.
 
+Breaking on a steep reef face: fails against Quiroga and Cheung's (2013) flume, 16 control tests on
+a 1:12 face to flats 0.1, 0.2 and 0.3 m deep, H0/h0 = 0.21 to 0.51, read from their video with
+the same breaking definition (validation/overturning/reefFaceBreaking.py). Every breaking height
+is high, +2.5 to +23.7 percent, 11 of 16 beyond the 10 percent criterion, and where the flume's
+wave breaks on the face the model breaks deeper, 5 of 9 beyond 15 percent. The flume's waves grow
+by 1.01 to 1.08 times H0 from the gauge to breaking, the model's by 1.13 to 1.20, so the gap opens
+before breaking; the model starts from the exact solitary wave of the flume's gauge height, where
+the flume's piston made a wave of its own shape, and that difference is untested.
+
 Not validated: a solitary wave over a reef. Blenkinsopp and Chaplin (2008) measured overturns over
 a 1:10 reef under periodic waves; `pysurf.ReefOverturn` runs them, handing this model waves from an
 SGN train, and fails against the flume because the train dissipates too little in breaking.

@@ -1,0 +1,178 @@
+{
+ "source": "Quiroga, P.D. & Cheung, K.F. (2013), Laboratory study of solitary-wave transformation over bed-form roughness on fringing reefs, Coastal Engineering 80, 35-48: the control tests (smooth concrete, blue crosses) of figure 11 (breaking depth) and figure 12 (breaking height), digitized 2026-11-23 from the figures embedded in the published PDF (1442 px wide) by marker colour, crosses found by blue runs along both diagonals, axes from the panel frames (x right edge 0.55, major ticks every 0.05; y from 0 to the frame top, 0.2 in figure 11 and 0.6 in figure 12).",
+ "definitions": {
+  "incidentHeightOverDepth": "H0/h0, the solitary wave height measured at WG1, 8.3 m before the toe of the reef face",
+  "breakingHeightOverDepth": "Hb/h0, the crest above still water at breaking, read from video against a 0.5 m grid; no trough forms ahead of a solitary wave, so it is also the wave height",
+  "breakingDepthOverDepth": "hb/h0, the still water depth under the breaking front (their figure 4)",
+  "breaking": "incipience when the front becomes near vertical, just before spilling or jet formation at the crest (Grilli et al. 1997)"
+ },
+ "flume": "Oregon State University Large Wave Flume: offshore depth h0 = 2.36 m plus the flat depth hf; a 1:12 reef face rising 2.36 m to a flat reef under hf of water; a rigid wall closing the flat 28.9 m past the reef edge (83.7 m from the wavemaker, the edge at 54.8 m); only H0/h0 of 0.2 or more analysed",
+ "digitizingError": {
+  "incidentHeightOverDepth": 0.001,
+  "breakingDepthOverDepth": 0.0006,
+  "breakingHeightOverDepth": 0.002
+ },
+ "note": "depthMarkerHidden marks the three crosses figure 11 hides under other markers (hf 0.2 m at 0.21; hf 0.3 m at 0.21 and 0.26). They break at the reef edge, where the paper puts the breaking depth at the flat's depth and the trend line runs flat at it; the file takes hf/h0 for them.",
+ "series": {
+  "0.0": {
+   "flatDepth_m": 0.0,
+   "offshoreDepth_m": 2.36,
+   "flatDepthOverDepth": 0.0,
+   "points": [
+    {
+     "incidentHeightOverDepth": 0.2105,
+     "breakingHeightOverDepth": 0.2198,
+     "breakingDepthOverDepth": 0.0523,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.26,
+     "breakingHeightOverDepth": 0.2706,
+     "breakingDepthOverDepth": 0.0784,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.3102,
+     "breakingHeightOverDepth": 0.3258,
+     "breakingDepthOverDepth": 0.0873,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.4101,
+     "breakingHeightOverDepth": 0.4317,
+     "breakingDepthOverDepth": 0.1224,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.4601,
+     "breakingHeightOverDepth": 0.4402,
+     "breakingDepthOverDepth": 0.1313,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.5198,
+     "breakingHeightOverDepth": 0.5036,
+     "breakingDepthOverDepth": 0.1491,
+     "depthMarkerHidden": false
+    }
+   ]
+  },
+  "0.1": {
+   "flatDepth_m": 0.1,
+   "offshoreDepth_m": 2.46,
+   "flatDepthOverDepth": 0.0407,
+   "points": [
+    {
+     "incidentHeightOverDepth": 0.2108,
+     "breakingHeightOverDepth": 0.2203,
+     "breakingDepthOverDepth": 0.04,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.2606,
+     "breakingHeightOverDepth": 0.271,
+     "breakingDepthOverDepth": 0.065,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.3206,
+     "breakingHeightOverDepth": 0.3422,
+     "breakingDepthOverDepth": 0.0821,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.4105,
+     "breakingHeightOverDepth": 0.4434,
+     "breakingDepthOverDepth": 0.1073,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.4703,
+     "breakingHeightOverDepth": 0.4742,
+     "breakingDepthOverDepth": 0.1329,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.5102,
+     "breakingHeightOverDepth": 0.5251,
+     "breakingDepthOverDepth": 0.1495,
+     "depthMarkerHidden": false
+    }
+   ]
+  },
+  "0.2": {
+   "flatDepth_m": 0.2,
+   "offshoreDepth_m": 2.56,
+   "flatDepthOverDepth": 0.0781,
+   "points": [
+    {
+     "incidentHeightOverDepth": 0.2103,
+     "breakingHeightOverDepth": 0.2124,
+     "breakingDepthOverDepth": 0.0781,
+     "depthMarkerHidden": true
+    },
+    {
+     "incidentHeightOverDepth": 0.3102,
+     "breakingHeightOverDepth": 0.3211,
+     "breakingDepthOverDepth": 0.0773,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.4002,
+     "breakingHeightOverDepth": 0.4174,
+     "breakingDepthOverDepth": 0.1179,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.4599,
+     "breakingHeightOverDepth": 0.4643,
+     "breakingDepthOverDepth": 0.1262,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.4997,
+     "breakingHeightOverDepth": 0.5154,
+     "breakingDepthOverDepth": 0.1339,
+     "depthMarkerHidden": false
+    }
+   ]
+  },
+  "0.3": {
+   "flatDepth_m": 0.3,
+   "offshoreDepth_m": 2.6599999999999997,
+   "flatDepthOverDepth": 0.1128,
+   "points": [
+    {
+     "incidentHeightOverDepth": 0.2108,
+     "breakingHeightOverDepth": 0.214,
+     "breakingDepthOverDepth": 0.1128,
+     "depthMarkerHidden": true
+    },
+    {
+     "incidentHeightOverDepth": 0.2607,
+     "breakingHeightOverDepth": 0.2635,
+     "breakingDepthOverDepth": 0.1128,
+     "depthMarkerHidden": true
+    },
+    {
+     "incidentHeightOverDepth": 0.3205,
+     "breakingHeightOverDepth": 0.308,
+     "breakingDepthOverDepth": 0.1128,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.4004,
+     "breakingHeightOverDepth": 0.4572,
+     "breakingDepthOverDepth": 0.1119,
+     "depthMarkerHidden": false
+    },
+    {
+     "incidentHeightOverDepth": 0.4503,
+     "breakingHeightOverDepth": 0.4852,
+     "breakingDepthOverDepth": 0.1352,
+     "depthMarkerHidden": false
+    }
+   ]
+  }
+ }
+}

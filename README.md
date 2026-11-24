@@ -39,7 +39,7 @@ The package lives under `src/pysurf/`. A facade class runs each model, and singl
 | Facade | Model | What it answers | Validated against | Not validated, or fails |
 | --- | --- | --- | --- | --- |
 | `Surfboard` | Bezier profiles and superellipse sections | A board from planform, rocker and sections, as a closed STL | Calibrated to a reference thruster's STL (0.9% rms); a calibration, not a validation | |
-| `OverturningWave` | Potential flow, boundary elements | The lip and the tube over any bed, up to the jet's landing | Grilli et al. (1997) breaking point; Feddersen et al. (2024) DNS overturn at impact; Pick and Feddersen (2026) fits; Guyenne and Grilli (2006) breaking time and crest | Overturn aspect ratio against the DNS (+28%; within 1.3% of the field); jet area in 3 of 5 slope cases |
+| `OverturningWave` | Potential flow, boundary elements | The lip and the tube over any bed, up to the jet's landing | Grilli et al. (1997) breaking point; Feddersen et al. (2024) DNS overturn at impact; Pick and Feddersen (2026) fits; Guyenne and Grilli (2006) breaking time and crest | Overturn aspect ratio against the DNS (+28%; within 1.3% of the field); jet area in 3 of 5 slope cases; breaking on Quiroga and Cheung's (2013) 1:12 reef face, 2.5 to 24% high |
 | `SplashUp` | Potential flow handed to SPH | The jet's landing and the splash-up | Mostert and Deike (2020): energy lost in active breaking -9%, dissipation rate -5% | The splash-up's shape; no air in the tube |
 | `PeelingWave` | Potential flow slices handed to 3D SPH | A plunging breaker peeling along an oblique or triangular reef | Construction checks only: incident wave speed, a steady peel, each plane repeating the 2D splash-up | No measured or 3D reference peel exists |
 | `BreakingWave` | δ-SPH on a GPU, 2D | Breaking, the overturn, and the water after it | Grilli et al. (1997) breaking point from 64 particles per depth; Feddersen et al. (2024) DNS overturn at 128 | After breaking: 35 to 47% too little energy lost (Mostert and Deike); bore 25 to 29% high over the Oregon State reef flat |
@@ -162,6 +162,8 @@ The GIF is a solitary wave of $H/d = 0.3$ breaking in open water over a 1:10 ree
 | Slices at the centre of a 3D ridge, $k = 0.25/d$: breaking time, crest | Guyenne and Grilli (2006), 3D | 7.890, 0.706 | 7.572, 0.680 | -4.0%, -3.7% | Pass (5%) |
 | Slices at a 3D ridge, $k = 0.34/d$ and $0.50/d$ | Guyenne and Grilli (2006), 3D | | | Breaking time outside 5% | Fail, expected |
 | Spanwise over streamwise velocity, $k = 0.25/d$, $z = -0.2d$ | Guyenne and Grilli (2006), 3D | 0.085 | 0.144 | +70% | Fail (30%) |
+| Breaking height $H_b/h_0$, 1:12 reef face, flats 0.1 to 0.3 m, $H_0/h_0$ = 0.21 to 0.51, 16 cases | Quiroga and Cheung (2013), flume video | 0.21 to 0.53 | | +2.5% to +23.7% | Fail in 11 of 16 (10%) |
+| Breaking depth $h_b/h_0$ under the front, where the flume's wave breaks on the face, 9 cases | Quiroga and Cheung (2013), flume video | 0.065 to 0.150 | | +1.4% to +28.8% | Fail in 5 of 9 (15%) |
 
 The breaking point is converged in resolution: from the SGN starting wave, $H_b/d$ is 0.504 and $h_b/d$ 0.359 at crest spacings of both $0.02d$ and $0.014d$. Started as Grilli's wave was, from the exact potential flow solitary wave, it breaks at 0.491 and 0.350: the starting wave accounts for about half the difference from Grilli, and the remaining 3.2% in $H_b/d$ is not explained. On the 1:35 slope the jet lands 0.36 s after breaking, over a tube $0.26d$ long and $0.28d$ high enclosing $0.035d^2$ of air, the same to 1% at a crest spacing of $0.014d$.
 
@@ -170,6 +172,8 @@ The breaking point is converged in resolution: from the SGN starting wave, $H_b/
 The overturn is measured as Feddersen et al. (2023, 2024) and Pick and Feddersen (2026) measure it at jet impact: the area $A_O$ enclosed by the overturn boundary, the area $A_J$ of the jet (the water above the tube, where the surface is multi-valued in $x$), both over the square of the highest elevation $H_I$, and the length $L$, width $W$ and angle $\theta_O$ of a Longuet-Higgins (1982) curve fitted to the boundary. Feddersen et al.'s (2024) DNS reproduces in 2D the soliton of their field-scale experiments in the Surf Ranch wave pool. The model runs the same case from the same starting wave, a Green-Naghdi solitary wave of $a_0/h_0 = 0.6$, and meets the criteria set before the comparison for the impact location, height, overturn area, jet area and angle. $W/L$ fails against the DNS but matches the field measurement at zero wind, and Pick and Feddersen's potential flow gives 0.41 for this case, so on this measure the DNS stands apart from both. Across plane slopes the overturn follows Pick and Feddersen's potential flow fits in every measure but the jet area, which is up to 19% above their fit while 12% below the DNS; it grows fast in the last instants before impact, which each study fixes in its own way. The five-point smoothing, every three steps once the face overhangs, accounts for a small part of the excess: smoothing every ten steps lowers the jet area 3 to 9 percent in all five cases, and the three failing cases still stand 9 to 15 percent over the fit, while the smoothing itself removes under 0.07 percent of the wave's energy over the overturn ([validation/overturning/](validation/overturning/smoothingEnergy.py)).
 
 ![The Surf Ranch soliton at jet impact, with the fitted overturn curve](examples/overturningWave/surfRanchOverturn.png)
+
+On a steep reef face the breaking point fails. Quiroga and Cheung (2013) read breaking from video in Oregon State's Large Wave Flume, on a 1:12 face up to a flat 0.1, 0.2 or 0.3 m deep, with Grilli's definition. Every model breaking height is high, by 2.5 to 24%, and where the flume's wave breaks on the face the model breaks in deeper water ([validation/overturning/](validation/overturning/reefFaceBreaking.py)). The gap opens before breaking: from the flume's first gauge to breaking its waves grow by 1.01 to 1.08 times their height, the model's by 1.13 to 1.20. The model starts from the exact solitary wave of the gauge's height, where the flume's piston made a wave of its own shape; that difference is the first suspect and is not yet tested.
 
 Not validated: the solitary wave over the reef in the GIF. Blenkinsopp and Chaplin's (2008) reef flume ran periodic waves, which `ReefOverturn` runs (below), and Mead and Black's (2001) relation between seabed gradient and tube shape comes from photographs of surf breaks rather than controlled conditions.
 
@@ -541,7 +545,7 @@ repo_root/
 │   └── openFoam/                    OpenFOAM guide and breaking-wave cases (cross-checks)
 ├── tests/                           pytest suite; `-m slow` runs the validation cases
 ├── validation/gpuSph/               The δ-SPH breaking-wave model's validation runs (GPU hours each), their references, DualSPHysics's cross-check runs and the results
-├── validation/overturning/          The boundary element model's smoothing diagnostic, run outside the suite
+├── validation/overturning/          The boundary element model's runs outside the suite: the smoothing diagnostic and the steep reef face
 │
 └── src/
     └── pysurf/
@@ -651,7 +655,7 @@ The δ-SPH validation runs in the tables above (Grilli's breaking point, the Sur
 - [ ] Fins on the generated board, and the board riding the SPH wave: its motion from the water's forces, the water feeling the board
 - [ ] SGN breaking that dissipates as a plunging breaker does on a steep reef, bringing the reef train's reflection and transmission to the flume's
 - [ ] Validate the shape of the splash-up against laboratory profiles of a breaking solitary wave
-- [ ] Validate the breaking point on a steep reef face against Quiroga and Cheung's (2013) measured breaking depth and height, with both the boundary element and the particle models
+- [ ] The breaking point on Quiroga and Cheung's (2013) steep reef face, which the boundary element model fails high: the flume's incident wave against the exact solitary wave, then the particle model
 - [ ] Bed friction in the swash, so the runup of a breaking wave can be checked against Synolakis's (1987) measured breaking runup
 - [ ] Validate the peeling breaker against a 3D simulation or a laboratory peel, and replace strip theory's spanwise velocity, which overstates the 3D ridge's by 70%
 - [ ] Extend the breaking wave to periodic waves from the piston wave maker

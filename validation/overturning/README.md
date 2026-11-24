@@ -1,6 +1,6 @@
-# Boundary Element Model Diagnostics
+# Boundary Element Model Runs
 
-Runs of `OverturningWave`, pySurf's boundary element model of an overturning wave, that take longer than the test suite allows. The model's validation cases (Grilli et al. 1997, the DNS of Feddersen et al. 2024, the fits of Pick and Feddersen 2026, Guyenne and Grilli 2006) run in the suite's slow tests (`python -m pytest -m slow`); the scripts here read how the model's numerics bear on those results.
+Runs of `OverturningWave`, pySurf's boundary element model of an overturning wave, that take longer than the test suite allows. The model's established validation cases (Grilli et al. 1997, the DNS of Feddersen et al. 2024, the fits of Pick and Feddersen 2026, Guyenne and Grilli 2006) run in the suite's slow tests (`python -m pytest -m slow`). The scripts here read how the model's numerics bear on those results, and test it against laboratory data the suite does not run.
 
 ## Smoothing energy
 
@@ -19,7 +19,26 @@ python smoothingEnergy.py report              # the reading, from results/
 | Energy the smoothing removes over the overturn | -0.05 to +0.07 percent of the wave's energy, under 0.0013 percent a pass (Longuet-Higgins and Cokelet 1976: 0.06 percent) |
 | Energy everything else changes over the overturn | Gains 0.11 to 0.35 percent, more the less often the surface is smoothed |
 
-The default interval stays at 3. Each script's docstring holds its criteria and recorded result; each run's record, with every smoothing pass, is in `results/`.
+The default interval stays at 3.
+
+## Breaking on a steep reef face
+
+`reefFaceBreaking.py` runs solitary waves onto the 1:12 face of the fringing reef Quiroga and Cheung (2013) built in Oregon State's Large Wave Flume, against their control tests' breaking height and depth, read from video with Grilli's definition (`reference/quiroga2013Fig11Fig12.json`, their figures 11 and 12 digitized). Sixteen cases over flats 0.1, 0.2 and 0.3 m deep, each from the exact solitary wave of the flume's gauge height; the dry flat is not run, since it needs a moving shoreline.
+
+```bash
+python reefFaceBreaking.py run --workers 9     # 16 runs, 20 to 80 minutes each on one thread
+python reefFaceBreaking.py report
+```
+
+| Reading | Criterion | Result |
+| --- | --- | --- |
+| Breaking height H_b/h0, 16 cases | 10 percent | +2.5 to +23.7 percent, 11 of 16 beyond: fails |
+| Breaking depth h_b/h0 under the front, the 9 cases that break on the face | 15 percent | +1.4 to +28.8 percent, deeper, 5 of 9 beyond: fails |
+| Growth from the gauge to breaking, H_b/H0 | Reported | Flume 0.96 to 1.14 (mostly 1.01 to 1.08); model 1.13 to 1.20 |
+
+The error has one sign: the model's wave breaks higher and further offshore, and it is already the larger wave before it breaks. The flume's wave came from a piston, with trailing waves and a shape of its own, where the model starts from the exact solitary wave of the same gauge height; that difference is the first suspect and is not yet tested.
+
+Each script's docstring holds its criteria and recorded result; each run's record is in `results/`.
 
 ## References
 
