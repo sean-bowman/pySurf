@@ -27,6 +27,7 @@ The model's claim is the breaking point: where and when a solitary wave breaks, 
 | Exact solitary wave over 30 $h_0$ of flat bed | `solitaryWave.py` | Clamond and Dutykh (2013), exact | Height lost under 2% | 0.42 to 0.50% at 32 ppd, 0.76% at 64 | Pass |
 | Still water after 20 $\sqrt{d/g}$ | `stillTank.py` | At rest | rms speed under $10^{-3}\sqrt{gd}$, fastest under $10^{-2}$ | 60 ppd: $7.1 \times 10^{-4}$, $3.2 \times 10^{-3}$; 30: rms $1.1 \times 10^{-3}$ | Pass at 60 |
 | The same, the fluid sorted in cell order every 0.1 $\sqrt{d/g}$ | `stillTank.py --sorted` | At rest | The same | 60 ppd: $6.1 \times 10^{-4}$, $2.7 \times 10^{-3}$ | Pass |
+| Breaking point on a 1:12 reef face, flats 0.3 m and dry, 6 cases | `reefFaceBreaking.py` | Quiroga and Cheung (2013), flume video | $H_b$ within 10%, $h_b$ within 15% where the flume's wave breaks on the face | 64 ppd: $H_b$ +0.4% to +20.6%, $h_b$ +0.9% to +21.4%, every error high and deeper; within 2.5% of the boundary element model on the 0.3 m flat | Fail in 3 of 6 |
 | Breaking point, the fluid sorted every 10 breaking checks | `grilliBreaking.py --sortInterval 10` | The unsorted run; Grilli et al. (1997) | Time, $H_b$ and $h_b$ within 1% of the unsorted run; Grilli's criteria | 64 ppd: within $2 \times 10^{-6}$ of the unsorted run; +4.3%, -8.4% | Pass |
 | 3D breaking point, sloping ridge, k = 0.10 to 0.50 | `ridge.py` | Guyenne and Grilli (2006), 3D potential flow | Time and crest height 5%, crest position 0.5 $h_0$ | 32 ppd: four of five k pass; k = 0.25 crest +0.53 $h_0$ | Fail at k = 0.25 |
 | The same at k = 0.25 with the crest zone | `ridge.py --zone` | Guyenne and Grilli (2006) | The same | Time +2.9%, crest +0.39 $h_0$, height -0.2% | Pass |
@@ -45,6 +46,7 @@ python grilliBreaking.py 64 [--sortInterval 10]
 python surfRanchOverturn.py 128
 python mostertEnergy.py 64 [--dualSphysicsSettings] [--energyBudget]
 python reefFlat.py 128 [--cflNumber 0.225] [--shift 0.5] [--energyBudget]
+python reefFaceBreaking.py --ppd 64
 python cavityArea.py [<run folder>]
 python solitaryWave.py 32
 python stillTank.py 60 [--sorted]
@@ -76,7 +78,7 @@ Runs of an hour or more are best started from a process that outlives the termin
 
 The 2D cases use `BreakingWave` with its defaults for 'deltaSph': Wendland C2 at three spacings, hydrostatic δ-SPH density diffusion, the kernel gradient correction in the continuity equation, wall pressure from the water, a limited artificial viscosity at α = 0.01, a density floor of 0.9 ρ₀, and the water laid in columns fitted to the bed. The 3D cases use `BreakingWave3D` with the same scheme. The breaking point is the start of the front face's last vertical run before the jet lands, read on the smoothed surface; a run with no landing takes the longest vertical run.
 
-- **Breaking point.** `grilliBreaking.py` is gate 1's breaking-point case and `ridge.py` gate 2's. In 3D the scheme's 2D lag at 32 particles per depth carries over: on the ridge's centre line, run in 2D, the wave breaks 0.37 $\sqrt{h_0/g}$ after Guyenne and Grilli's 2D result, against 0.10 at 64. The crest zone (`--zone`) closes most of it.
+- **Breaking point.** `grilliBreaking.py` is gate 1's breaking-point case and `ridge.py` gate 2's. In 3D the scheme's 2D lag at 32 particles per depth carries over: on the ridge's centre line, run in 2D, the wave breaks 0.37 $\sqrt{h_0/g}$ after Guyenne and Grilli's 2D result, against 0.10 at 64. The crest zone (`--zone`) closes most of it. `reefFaceBreaking.py` takes the breaking point to a steep 1:12 reef face, against Quiroga and Cheung's (2013) video of their flume, and fails in 3 of 6 cases, every error high and deeper. The boundary element model fails the same reference the same way, and on the 0.3 m flat the two models agree within 2.5% in $H_b$ and 0.7% in $h_b$. Read at the flume's own gauges up the face (`validation/overturning/reefFaceGauges.py`, the 0.1 m flat), the boundary element model's crest at breaking lies within 4% of the largest elevation those gauges recorded, while the video's breaking heights sit 7 to 14% below them: the failure measures the gap to the video's breaking heights, which the gauges do not bear out.
 - **Overturn.** `surfRanchOverturn.py` reads five measures at the jet's landing. The pass at 128 particles per depth is not converged: the overturn area runs 0.495, 0.308 and 0.341 $H_I^2$ at 32, 64 and 128, against 0.352.
 - **After breaking.** `mostertEnergy.py` and `reefFlat.py` both fail, in the same direction: the model keeps too much energy once the wave breaks. The model has no turbulence. Its artificial viscosity and density diffusion stand in for the loss, and both shrink with the spacing. The energy budget (`--energyBudget`, `pysurf.sphEnergy`) splits the loss by term: at 64 particles per depth the density diffusion takes three quarters of it and the limited viscosity a quarter, the continuity correction gives a sixth back, and the walls take 14% through the extrapolated wall pressure's work and the clamp at the bed, neither of which a free-slip wall would do. The share lost moves 6% under a rounding-level change to the device kernels (0.165 to 0.156), and the walls' share with it (14% to 8.5%). `reefFlat.py`'s scatter runs (`--cflNumber 0.225`, `--shift 0.5`) show the WG12 failure and its growth from 64 to 128 particles per depth are both larger than the run-to-run spread. The reef edge's position, 54.8 m, is scaled from the thesis's figure; the thesis bounds it to 54.4 to 54.9 m, which moves WG12 by 0.011 $H_0$ at most.
 - **3D construction.** `obliqueReef.py` checks the bed's rotation and the crest's kinematics against a closed form, and `extrudedReef.py` checks the 3D form against the 2D one. In the oblique tank the break crosses 9 to 11% slower than the closed form: the free-slip walls mirror the bed into a chevron, a limit of a walled tank.
@@ -95,6 +97,7 @@ The 2D cases use `BreakingWave` with its defaults for 'deltaSph': Wendland C2 at
   - the surface before the jet lands;
   - the energy lost in active breaking;
   - the bore over a reef flat;
+  - the breaking point on a steep reef face against the flume's video, where the boundary element model fails the same way;
   - the overturn's shape in 3D, which no measurement covers and which the crest zone does not carry in 2D.
 
 ## Files
@@ -103,7 +106,7 @@ The 2D cases use `BreakingWave` with its defaults for 'deltaSph': Wendland C2 at
 | --- | --- |
 | `common.py` | Paths, the time unit, and the results writer the scripts share |
 | `grilliBreaking.py`, `surfRanchOverturn.py`, `mostertEnergy.py`, `solitaryWave.py`, `stillTank.py` | Gate 1, 2D |
-| `reefFlat.py` | The Oregon State reef flat, 2D |
+| `reefFlat.py`, `reefFaceBreaking.py` | The Oregon State fringing reef, 2D: the bore over the flat and the breaking point on the face |
 | `ridge.py` | Gate 2, 3D |
 | `obliqueReef.py`, `extrudedReef.py`, `shoalReef.py`, `cavityArea.py` | The 3D model over reefs |
 | `reference/quiroga2012Fig25Bf0.json` | The flume's smooth-bed gauge peaks, digitized from Quiroga (2012) figure 25, with the gauge positions and the reef edge's bounds |

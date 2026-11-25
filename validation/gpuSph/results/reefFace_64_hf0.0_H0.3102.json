@@ -1,0 +1,41 @@
+{
+ "case": "reefFaceBreaking",
+ "particlesPerDepth": 64,
+ "flat": "0.0",
+ "incidentHeightOverDepth": 0.3102,
+ "flume": {
+  "incidentHeightOverDepth": 0.3102,
+  "breakingHeightOverDepth": 0.3258,
+  "breakingDepthOverDepth": 0.0873,
+  "depthMarkerHidden": false
+ },
+ "summary": {
+  "slopeParameter": 0.22757632043944775,
+  "predictedBreakerType": "plunging",
+  "particlesPerDepth": 64,
+  "bedFitted": true,
+  "startJitter": 0.0,
+  "startSeed": 1,
+  "startPacking": false,
+  "faceArc": 2.0,
+  "fluidParticles": 95467,
+  "wallClockSeconds": 365.3961597000016,
+  "broke": true,
+  "breakingTime": 5.7352644865440405,
+  "breakingIndex": 3.659312994801523,
+  "breakingHeightOverDepth": 0.3640654043937084,
+  "breakingTroughOverDepth": -0.0026819922748039238,
+  "breakingWaveHeightOverDepth": 0.3667473966685123,
+  "breakingDepthOverDepth": 0.09949009688728605,
+  "breakingDistanceFromToe": 10.806118837352567,
+  "breakingFaceDepthOverDepth": 0.08804751593350946,
+  "maxRunupOverDepth": 0.0,
+  "touchedDown": false
+ },
+ "wallSeconds": 367.86601279999013,
+ "heightError": 0.11745059666577173,
+ "depthError": 0.008562610922215885,
+ "depthJudged": true,
+ "passes": false,
+ "crestPastEdge": -1.1938811626474326
+}

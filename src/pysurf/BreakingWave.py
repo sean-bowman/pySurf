@@ -71,6 +71,13 @@ the boundary element model's jet (`SplashUp`'s hand-off, plain term) the scheme 
 0.18, where the hand-off with the Shepard scheme loses 0.30 at 48: the shortfall is the dissipation
 after the jet lands, not the jet.
 
+The breaking point on a steep reef face fails against the same flume's video in 3 of 6 cases at 64
+particles per depth (validation/gpuSph/reefFaceBreaking.py: the 1:12 face to a 0.3 m flat and a
+dry one, H0/h0 = 0.31 to 0.52), every error high, +0.4 to +20.6 percent in H_b, and deeper. The
+boundary element model fails the same reference the same way and agrees with these runs within 2.5
+percent on the 0.3 m flat; read at the flume's gauges up the face, its crest at breaking lies within
+4 percent of theirs, and the video's breaking heights sit 7 to 14 percent below them.
+
 Not validated: the bore after breaking. Quiroga and Cheung (2013) ran solitary waves over a fringing
 reef in Oregon State University's Large Wave Flume: h0 = 2.66 m, a 1:12 face rising to a flat
 0.30 m deep, and a rigid wall 28.9 m past the reef edge. For H0/h0 = 0.4 the smooth-bed record at
