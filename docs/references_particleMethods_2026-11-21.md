@@ -12,6 +12,9 @@ Five sources from graphics SPH, set against pySurf's SPH scheme, with the DOIs o
     - [Particle-based Viscoelastic Fluid Simulation](#particle-based-viscoelastic-fluid-simulation)
     - [Particle Simulation using CUDA](#particle-simulation-using-cuda)
     - [SebLague/Fluid-Sim, branch Episode-01](#seblaguefluid-sim-branch-episode-01)
+    - [SebLague/Fluid-Sim, main branch: rendering](#seblaguefluid-sim-main-branch-rendering)
+    - [Screen Space Fluid Rendering for Games](#screen-space-fluid-rendering-for-games)
+    - [Unified Spray, Foam and Bubbles for Particle-Based Fluids](#unified-spray-foam-and-bubbles-for-particle-based-fluids)
   - [References these sources lead to](#references-these-sources-lead-to)
   - [DOIs of references pySurf cites](#dois-of-references-pysurf-cites)
   - [Copies to procure](#copies-to-procure)
@@ -75,6 +78,40 @@ Five sources from graphics SPH, set against pySurf's SPH scheme, with the DOIs o
   - Viscosity pulls each velocity toward its neighbors' with the poly6 kernel (an XSPH-like smoothing applied to the velocity itself).
   - Neighbor search: cells of one smoothing radius hashed into a table of N entries, bitonic sort of (index, hash, key), offsets per key; hash collisions are skipped by comparing hashes. Particle data stays in its original order.
   - Walls: a particle outside the box is clamped back with its normal velocity reversed and damped. Particles are drawn as instanced spheres colored by speed.
+
+### SebLague/Fluid-Sim, main branch: rendering
+
+- **URL:** [https://github.com/SebLague/Fluid-Sim](https://github.com/SebLague/Fluid-Sim) (commit 4717b72, 2025-10-19; scripts and shaders read from a shallow clone in `externalReferences/Fluid-Sim`)
+- **Accessed:** 2026-11-24
+- **Relevance:** The same simulation carried on into rendering, with four ways to draw the particles as water; it bears on roadmap item 5.
+- **Key findings:**
+  - Screen space (after Green 2010 and van der Laan et al. 2009): each particle is a camera-facing quad that writes a sphere's front depth, and, into a second buffer, its thickness added along the view ray. The depth is smoothed with a bilateral filter whose screen radius follows a world radius at each pixel's depth and whose weight falls with the depth difference, the thickness with a Gaussian; normals come from the smoothed depth.
+  - The composite: Fresnel reflectance for water (n 1.33), the refracted ray offset by the thickness, Beer-Lambert transmission exp(-thickness x extinction) per colour channel, a sky gradient and a tiled floor as the environment, foam drawn over.
+  - Density volume: the SPH density sampled on a 3D texture over the bounds every frame, then drawn either by marching cubes at an iso level or by ray marching through it, with normals from the density gradient, refraction and reflection over several bounces, and absorption from the density integral.
+  - Whitewater after Ihmsen et al. (2012): each fluid particle spawns white particles at a rate set by a trapped-air potential (relative speed of converging neighbours, weighted by 1 - r/h) times a kinetic-energy factor; a white particle with few fluid neighbours is spray (gravity and drag), with many a bubble (buoyant, pulled to the fluid's velocity), otherwise foam carried at the fluid's mean velocity and dissolving over 5 to 15 s. The wave-crest potential of the paper is left out. In `FluidSim.compute` and `FluidSim.cs`: trapped-air thresholds 5 to 25 and kinetic thresholds on |v|^2 of 15 to 80, in the scene's units; spray at 5 neighbours or fewer, bubbles at 15 or more; spray drag 0.04 |v| v; bubbles accelerate toward the fluid's velocity at 3 per second and rise at (buoyancy - 1) g with buoyancy 1.5.
+  - Changes to the simulation since Episode-01: the fluid's state is reordered into the spatial hash's order every step (`Reorder`, `ReorderCopyBack`), and particles with fewer than 8 neighbours feel a drag.
+
+### Screen Space Fluid Rendering for Games
+
+- **URL:** [https://developer.download.nvidia.com/presentations/2010/gdc/Direct3D_Effects.pdf](https://developer.download.nvidia.com/presentations/2010/gdc/Direct3D_Effects.pdf) (Green, GDC 2010, NVIDIA; docs/papers/green2010Gdc.pdf)
+- **Accessed:** 2026-11-24
+- **Relevance:** The screen-space pipeline the Fluid-Sim main branch follows, as given by one of van der Laan et al.'s authors.
+- **Key findings:**
+  - Particles as point sprites with sphere depth; the depth surface smoothed by a bilateral filter, a separable approximation standing in for van der Laan et al.'s curvature flow at a fraction of the cost.
+  - Normals from the smoothed depth by finite differences, taking the smaller of the forward and backward differences so edges do not bleed.
+  - Thickness from additive Gaussian splats or discs drawn without a depth test, blurred, and cheap enough at a lower resolution; Beer's law with a constant per colour channel attenuates the colour through it.
+  - Shading on the smoothed surface's position and normal: wrapped diffuse, Blinn-Phong specular, and Schlick's Fresnel weighting a cubemap reflection.
+
+### Unified Spray, Foam and Bubbles for Particle-Based Fluids
+
+- **URL:** [https://cg.informatik.uni-freiburg.de/publications/2012_CGI_sprayFoamBubbles.pdf](https://cg.informatik.uni-freiburg.de/publications/2012_CGI_sprayFoamBubbles.pdf) (Ihmsen, Akinci, Akinci & Teschner, Computer Graphics International 2012, The Visual Computer 28; docs/papers/ihmsen2012.pdf)
+- **Accessed:** 2026-11-24
+- **Relevance:** The whitewater model behind Fluid-Sim's foam; for pySurf, a way to mark where a breaking wave would whiten, drawn and labelled, not validated.
+- **Key findings:**
+  - Three potentials, each clamped to 0 to 1 by Φ(I, τmin, τmax): trapped air from the relative velocities of converging neighbours, wave crest from the surface curvature where the velocity runs along the outward normal, and kinetic energy.
+  - Diffuse particles generated per particle per step: I_k (k_ta I_ta + k_wc I_wc) Δt, sampled in a cylinder around the particle along its velocity.
+  - Classified by fluid neighbour count into spray (ballistic), foam (carried by the fluid, dissolving) and bubbles (buoyant, with drag toward the fluid's velocity); advected in a post-process, so the fluid itself is unchanged.
+  - Constants for all their scenes, stepped at the fluid's 50 frames per second: τ_wc 2 to 8, τ_ta 5 to 20, τ_k 5 to 50; spray under 6 fluid neighbours, bubbles over 20; the diffuse volume radius ten times under the fluid particles'. The lighthouse scene spawns up to 30 per frame from trapped air and 50 from wave crests. The particle masses behind τ_k are not given, and eq. 4 does not say how interior particles' normals enter the curvature sum.
 
 ## References these sources lead to
 

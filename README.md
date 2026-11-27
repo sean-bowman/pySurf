@@ -373,6 +373,7 @@ The animations in `examples/breakingWave3D/`:
 
 - [shoalReef32.mp4](examples/breakingWave3D/shoalReef32.mp4): the GIF above at full resolution.
 - [shoalReefParticles32.mp4](examples/breakingWave3D/shoalReefParticles32.mp4): the animation at the top of this page at full resolution. The same reef and resolution run again to 24 $\sqrt{d/g}$, saving the whole fluid every 0.025 $\sqrt{d/g}$ from 19.5 on, and drawn from its particles: the camera sits low and shoreward of the reef, ahead of the peel, looking back along the crest into the tube. Each frame draws the particles nearest the camera, colored by speed over the wave's. The breaking point runs along the crest at about 3.5 $\sqrt{gd}$ with the lip landing behind it, and the bore then crosses the shelf. The run took 31.7 GPU hours; it stopped twice, once paused and once out of host memory, and took up its last checkpoint each time. Not validated: the overturn and the bore lie past the breaking point.
+- [shoalReefSurface32.mp4](examples/breakingWave3D/shoalReefSurface32.mp4): the same frames drawn as a water surface with spray, foam and bubbles ([tools/rendering/](tools/rendering/renderSurfaceFrames.py)). The surface is the 0.5 level of the particles' volumes spread by a Wendland C2 kernel three spacings wide and ray marched on the GPU, its normals from the same volumes at six spacings. On two exact solitary waves it lies within half a spacing of the exact surface, its normals within 15 degrees; the six-spacing width was chosen on the first wave and held on the second. The whitewater is Ihmsen et al.'s (2012) model run over the saved frames: in each of the seven inner sections it starts within 0.1 $\sqrt{d/g}$ of the breaking tracker's time and follows the peel ([validation/rendering/](validation/rendering/whitewaterOnset.py)). Not validated: the overturn and the bore lie past the breaking point, and the whitewater's amounts are a look.
 - [shoalReef16vs32.mp4](examples/breakingWave3D/shoalReef16vs32.mp4): the same reef at 16 and 32 particles per depth, stacked. At 16 the shelf is six particles deep, and the breaker curls without a clean jet.
 - [obliqueReef16.mp4](examples/breakingWave3D/obliqueReef16.mp4): the oblique reef above, at 16 particles per depth.
 - [pipelineLeft16.mp4](examples/breakingWave3D/pipelineLeft16.mp4): a measured bed, the left at Pipeline, Oahu. The bed is the USACE 2013 topobathy lidar with depths capped at 10 m, turned so a 3 m solitary wave from 295 degrees travels along +x, in a tank 160 m across with 15 sections. At 16 particles per depth with the crest zone the run took 10.5 GPU hours. The break starts toward the south-southwest end of the tank and peels along the crest toward the north-northeast at about twice the crest's speed.
@@ -538,15 +539,17 @@ repo_root/
 │   ├── splashUp/                    Splash-up animation, potential flow handed to SPH
 │   ├── peelingWave/                 A breaker peeling along an oblique reef and both ways on a triangular one, 3D SPH, and its plane histories
 │   ├── breakingWave/                The particle model's reef-flat validation and the Surf Ranch reef past touchdown; a 2D breaking animation
-│   ├── breakingWave3D/              A wave breaking over a turned reef, drawn as sections and from its particles; an oblique reef; Pipeline, 3D GPU SPH
+│   ├── breakingWave3D/              A wave breaking over a turned reef, drawn as sections, from its particles and as a surface with whitewater; an oblique reef; Pipeline, 3D GPU SPH
 │   ├── gpuBackend/                  The splash-up, the peel and the A-frame on the CPU and GPU backends side by side
 │   ├── surfaceWave/                 Breaking wave animation, free-surface model
 │   ├── reefBreak/                   Swell over a reef animation, free-surface model
 │   ├── reefOverturn/                A reef overturn at jet impact
 │   └── openFoam/                    OpenFOAM guide and breaking-wave cases (cross-checks)
 ├── tests/                           pytest suite; `-m slow` runs the validation cases
+├── tools/rendering/                 Saved frames drawn as a water surface with spray, foam and bubbles, to mp4 or stills (GPU)
 ├── validation/gpuSph/               The δ-SPH breaking-wave model's validation runs (GPU hours each), their references, DualSPHysics's cross-check runs and the results
 ├── validation/overturning/          The boundary element model's runs outside the suite: the smoothing diagnostic and the steep reef face
+├── validation/rendering/            Where the whitewater starts on the Surf Ranch run, against the breaking tracker
 │
 └── src/
     └── pysurf/
@@ -614,7 +617,8 @@ The suite runs headless and needs no install: `pyproject.toml` puts `src/` on th
 - the height field: smoothing against the Gaussian's transform, crops, turns against a closed form, text grids read back;
 - `BreakingWave3D`: its build, and a short GPU run against the exact solitary wave, with and without the crest zone;
 - the energy budget: closure on both backends, the device's budget against the array solver's, and the device step bit for bit with the budget on and off;
-- sorting: the key against the hash grid's cell order, sorted runs against unsorted ones on both backends, and a checkpointed run that sorts.
+- sorting: the key against the hash grid's cell order, sorted runs against unsorted ones on both backends, and a checkpointed run that sorts;
+- rendering: the water surface against one particle's level sphere, a flat slab and two exact solitary waves, one setting the normals' width and one held out; the whitewater's potentials, classes, motion, spawning and splats against closed forms and symmetry.
 
 The δ-SPH validation runs in the tables above (Grilli's breaking point, the Surf Ranch overturn, Mostert and Deike's energy loss and its budget, Guyenne and Grilli's ridge, the oblique reef, the Oregon State reef flat and the cavity cross-check) take 1 to 32 GPU hours each and run outside the suite, from the scripts in [validation/gpuSph/](validation/gpuSph/README.md), each with its criteria and recorded result.
 
