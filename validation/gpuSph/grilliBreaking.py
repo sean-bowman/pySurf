@@ -45,19 +45,20 @@ from pysurf.BreakingWave import BreakingWave
 grilliHeight, grilliIndex = 0.476, 1.380
 grilliDepth = grilliHeight / grilliIndex
 
-def main(ppd: int, sortInterval: int = 0) -> dict:
+def main(ppd: int, sortInterval: int = 0, densityDiffusion: str = 'hydrostatic') -> dict:
 
     '''Run the case at `ppd` particles per depth and report it against the criteria.'''
 
     started = time.perf_counter()
     wave = BreakingWave(depth = 1.0, waveHeight = 0.3, beachSlope = 1.0 / 35.0, particlesPerDepth = ppd,
                         scheme = 'deltaSph', backend = 'gpu', frameInterval = 0.05 * max(1.0, ppd / 32.0),
-                        sortInterval = sortInterval)
+                        sortInterval = sortInterval, solverOptions = {'densityDiffusion': densityDiffusion})
     # The breaking point is final at the jet's landing, where the run stops
     wave.run(progress = True, stopAt = 'breaking')
     summary = wave.summary()
     summary['wall'] = time.perf_counter() - started
-    record = {'case': 'grilliBreaking', 'particlesPerDepth': ppd, 'sortInterval': sortInterval, 'summary': summary,
+    record = {'case': 'grilliBreaking', 'particlesPerDepth': ppd, 'sortInterval': sortInterval,
+              'densityDiffusion': densityDiffusion, 'summary': summary,
               'reference': {'breakingHeightOverDepth': grilliHeight, 'breakingDepthOverDepth': grilliDepth}}
     if summary.get('broke'):
         heightError = percent(summary['breakingHeightOverDepth'], grilliHeight)
@@ -71,12 +72,14 @@ def main(ppd: int, sortInterval: int = 0) -> dict:
     else:
         record['verdict'] = {'passes': False}
         print(f'{ppd} ppd: no breaking point read; fails', flush = True)
-    writeResult(f'grilliBreaking_{ppd}' + ('_sorted' if sortInterval else ''), record)
+    writeResult(f'grilliBreaking_{ppd}' + ('_sorted' if sortInterval else '') + common.diffusionSuffix(densityDiffusion),
+                record)
     return record
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = "Gate 1: the breaking point on Grilli's 1:35 slope.")
     parser.add_argument('ppd', type = int, help = 'particles per depth')
     parser.add_argument('--sortInterval', type = int, default = 0, help = 'breaking checks between sorts; 0 for none')
+    common.addDiffusionArgument(parser)
     arguments = parser.parse_args()
-    main(arguments.ppd, arguments.sortInterval)
+    main(arguments.ppd, arguments.sortInterval, arguments.densityDiffusion)

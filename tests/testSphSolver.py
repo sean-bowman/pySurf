@@ -14,7 +14,11 @@ reconstructs with for exactness on a linear flow out to a free surface. The XSPH
 checked for leaving momentum untouched,
 the continuity rate against zero for a rigid translation and against -rho div(v) for a uniform
 expansion, and the Shepard filter against returning a uniform density unchanged at the free
-surface. A still tank initialized hydrostatically is run and must stay at rest.
+surface. The renormalized density gradient is checked for exactness on a linear field on jittered
+particles up to a free surface, and beside a bed whose particles carry their hydrostatic density;
+Antuono et al.'s diffusive term for leaving any linear density alone where the hydrostatic form
+does not, for its O(h) residual on water at rest under the Tait equation, and for conserving mass.
+A still tank initialized hydrostatically is run and must stay at rest.
 
 Sean Bowman [10/11/2026]
 
@@ -30,7 +34,7 @@ from pysurf.sphKernels import CubicSplineKernel, createKernel
 from pysurf.sphNeighbors import neighborPairs
 from pysurf.sphParticles import ParticleSystem, latticePoints
 from pysurf.sphSolver import (artificialViscosity, cflTimeStep, continuityRate, correctionMatrices, densityDiffusionRate, extrapolatedWallPressure, hydrostaticDensity,
-                              hydrostaticDensityDifference, limitedVelocityDifference, pairAccelerations, scatterAdd, shepardDensity,
+                              hydrostaticDensityDifference, limitedVelocityDifference, pairAccelerations, renormalizedDensityGradient, scatterAdd, shepardDensity,
                               freeSurface, shiftedVelocityChange, shiftingDisplacement, shiftingFields, speedOfSound, summationDensity, taitDensity,
                               taitEquationOfState, velocityGradients, xsphVelocity, cellOrderKey, SimulationConfig, WcsphSolver)
 from pysurf.WaterSim.scenarios.sloshingTank import SloshingTankConfig, createSloshingTank
@@ -376,6 +380,115 @@ def testHydrostaticDifferenceIsTheEquilibriumProfile():
                                               0.5 * (densities[upper] + densities[lower]), rho0, c0, constants.gravity)
 
     assert difference == pytest.approx(densities[lower] - densities[upper], rel = 1e-6)
+
+def jitteredBlock(seed: int = 2) -> tuple:
+
+    '''Water to a free surface at 0.1 on a jittered lattice, with its pairs.'''
+
+    rng = np.random.default_rng(seed)
+    positions = latticePoints([0.0, 0.0], [0.2, 0.1], s)
+    positions += rng.uniform(-0.15, 0.15, size = positions.shape) * s
+    i, j, separation, distance, _, gradients = pairSetup(positions)
+
+    return positions, i, j, separation, distance, gradients, np.ones(len(positions), dtype = bool)
+
+def renormalized(densities: np.ndarray, i: np.ndarray, j: np.ndarray, separation: np.ndarray, gradients: np.ndarray,
+                 fluid: np.ndarray) -> tuple:
+    '''L and the renormalized density gradient from the same volumes, as the solver builds them each step.'''
+    corrections = correctionMatrices(rho0 * s * s, densities, i, j, separation, gradients, fluid)
+    return corrections, renormalizedDensityGradient(rho0 * s * s, densities, i, j, gradients, corrections, fluid)
+
+def testTheRenormalizedDensityGradientIsExactForALinearField():
+
+    # A tilted linear density on jittered particles, the free surface and the corners included
+    positions, i, j, separation, _, gradients, fluid = jitteredBlock()
+    slope = np.array([3.0, -40.0])
+    densities = rho0 + positions @ slope
+    corrections, result = renormalized(densities, i, j, separation, gradients, fluid)
+    applies = ~np.all(np.isclose(corrections, np.eye(2)), axis = (1, 2))
+
+    assert applies.sum() > 0.95 * len(positions)
+    assert result[applies] == pytest.approx(np.broadcast_to(slope, result[applies].shape), abs = 1e-9 * 40.0)
+
+def testTheRenormalizedDensityGradientTakesTheWallsDensities():
+
+    # Water at rest on a bed whose particles carry the hydrostatic density of their depth: beside the
+    # bed the gradient is still the hydrostatic one, -rho g / c^2 to the profile's slight curvature
+    positions, isFluid, densities = waterOnABed()
+    i, j, separation, _, _, gradients = pairSetup(positions)
+    corrections = correctionMatrices(rho0 * s * s, densities, i, j, separation, gradients, isFluid)
+    result = renormalizedDensityGradient(rho0 * s * s, densities, i, j, gradients, corrections, isFluid)
+    expected = -densities * constants.gravity / (c0**2 * (densities / rho0)**6)
+    nearBed = isFluid & (positions[:, 1] < 2.0 * h) & (positions[:, 0] > 2.0 * h) & (positions[:, 0] < 0.3 - 2.0 * h)
+
+    assert nearBed.sum() > 20
+    assert result[nearBed, 1] == pytest.approx(expected[nearBed], rel = 1e-3)
+    assert np.abs(result[nearBed, 0]).max() < 1e-6 * np.abs(expected).max()
+    assert np.all(result[~isFluid] == 0.0)
+
+def testAntuonoDiffusionLeavesAnyLinearDensityAlone():
+
+    '''
+
+    A density rising linearly along x is not water at rest, so the hydrostatic form diffuses it
+    wherever the support is cut, at the free surface and the sides. Antuono et al.'s form, which
+    subtracts the renormalized gradients' projection, leaves it alone at every particle to rounding,
+    as it does water at rest.
+
+    '''
+
+    positions, i, j, separation, distance, gradients, fluid = jitteredBlock()
+    densities = rho0 + 50.0 * positions[:, 0]
+    arguments = (rho0 * s * s, densities, i, j, separation, distance, gradients, len(positions), h, c0, 0.1, rho0)
+    hydrostatic = densityDiffusionRate(*arguments, gravity = constants.gravity)
+    antuono = densityDiffusionRate(*arguments, gradients = renormalized(densities, i, j, separation, gradients, fluid)[1])
+
+    assert np.abs(hydrostatic).max() > 1e-3 * rho0
+    assert np.abs(antuono).max() < 1e-9 * np.abs(hydrostatic).max()
+
+    positions, densities, i, j, separation, distance, gradients = equilibriumColumn()
+    fluid = np.ones(len(positions), dtype = bool)
+    arguments = (rho0 * s * s, densities, i, j, separation, distance, gradients, len(positions), h, c0, 0.1, rho0)
+    molteni = densityDiffusionRate(*arguments)
+    atRest = densityDiffusionRate(*arguments, gradients = renormalized(densities, i, j, separation, gradients, fluid)[1])
+
+    # Under the Tait equation water at rest's density curves, rho_zz = -5 rho0 g^2 / c0^4 at the surface. The
+    # renormalized gradient is exact for a linear field only, so where the support is cut it misses by
+    # O(h rho_zz) and the term leaves O(delta h c0 rho_zz) there, an O(h) residual (0.31 of it at the
+    # column's top and bottom rows, 0.0005 of Molteni's inside)
+    curvature = 5.0 * rho0 * constants.gravity**2 / c0**4
+    assert np.abs(atRest).max() < 0.1 * h * c0 * curvature
+    assert np.abs(atRest).max() < 1e-3 * np.abs(molteni).max()
+
+def testAntuonoDiffusionConservesMassAndFlattensABump():
+
+    positions, i, j, separation, distance, gradients, fluid = jitteredBlock()
+    rng = np.random.default_rng(9)
+    densities = rho0 * (1.0 + rng.uniform(-0.01, 0.01, size = len(positions)))
+    masses = rho0 * s * s
+    rate = densityDiffusionRate(masses, densities, i, j, separation, distance, gradients, len(positions), h, c0, 0.1,
+                                rho0, gradients = renormalized(densities, i, j, separation, gradients, fluid)[1])
+
+    # sum_i V_i D_i vanishes pair by pair
+    assert abs(np.sum(masses / densities * rate)) < 1e-12 * np.sum(masses / densities * np.abs(rate))
+
+    center = int(np.argmin(np.linalg.norm(positions - np.array([0.1, 0.05]), axis = 1)))
+    bump = np.full(len(positions), rho0)
+    bump[center] += 1.0
+    rate = densityDiffusionRate(masses, bump, i, j, separation, distance, gradients, len(positions), h, c0, 0.1, rho0,
+                                gradients = renormalized(bump, i, j, separation, gradients, fluid)[1])
+
+    near = (np.linalg.norm(positions - positions[center], axis = 1) < s) & (np.arange(len(positions)) != center)
+    assert rate[center] < 0.0
+    assert np.all(rate[near] > 0.0)
+
+def testTheTwoSubtractionsAreAlternatives():
+
+    positions, i, j, separation, distance, gradients, fluid = jitteredBlock()
+    densities = np.full(len(positions), rho0)
+    with pytest.raises(ValueError):
+        densityDiffusionRate(rho0 * s * s, densities, i, j, separation, distance, gradients, len(positions), h, c0, 0.1,
+                             rho0, gravity = constants.gravity, gradients = np.zeros((len(positions), 2)))
 
 def shiftsOf(positions: np.ndarray, isFluid: np.ndarray | None = None, size: float = 1e-5) -> tuple:
 

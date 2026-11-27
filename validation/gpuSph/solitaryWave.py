@@ -59,7 +59,7 @@ def fittedCrest(positions: np.ndarray, spacing: float, guess: float) -> tuple:
     parameters, _ = curve_fit(model, surface[near, 0], eta[near], p0 = [eta[near].max(), guess, 0.5])
     return float(parameters[0]), float(parameters[1])
 
-def main(ppd: int) -> dict:
+def main(ppd: int, densityDiffusion: str = 'hydrostatic') -> dict:
 
     '''Run the channel at `ppd` particles per depth and report the crest's loss against the criterion.'''
 
@@ -79,7 +79,8 @@ def main(ppd: int) -> dict:
     config = SimulationConfig(domainMin = np.array([0.0, -(wallLayers + 1.0) * spacing]),
                               domainMax = np.array([channel.endX + (wallLayers + 1.0) * spacing, wallTop]),
                               particleSpacing = spacing, referenceDensity = rho0, maxTimeStep = 1.0,
-                              speedOfSound = 10.0 * celerity, backend = 'gpu', **scheme)
+                              speedOfSound = 10.0 * celerity, backend = 'gpu',
+                              **dict(scheme, densityDiffusion = densityDiffusion))
     solver = WcsphSolver(config, boundary = boundary)
     solver.initialize(particles)
     # The start carries the exact wave's pressure, in the fluid and in the walls
@@ -115,12 +116,14 @@ def main(ppd: int) -> dict:
     print(f'{ppd} ppd: crest height lost from 1 to {travel:.0f} h0 of travel {loss:.2f} percent (limit 2): {verdict(passes)}; '
           f'speed {speedRatio:.4f} of the exact wave\'s; {particles.nFluid} particles, {time.perf_counter() - started:.0f} s',
           flush = True)
-    record = {'case': 'solitaryWave', 'particlesPerDepth': ppd, 'fluidParticles': int(particles.nFluid),
+    record = {'case': 'solitaryWave', 'particlesPerDepth': ppd, 'densityDiffusion': densityDiffusion, 'fluidParticles': int(particles.nFluid),
               'samples': samples.tolist(), 'verdict': {'heightLostPercent': loss, 'speedRatio': speedRatio, 'passes': passes}}
-    writeResult(f'solitaryWave_{ppd}', record)
+    writeResult(f'solitaryWave_{ppd}' + common.diffusionSuffix(densityDiffusion), record)
     return record
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = 'Gate 1: the exact solitary wave down 30 depths of flat bed.')
     parser.add_argument('ppd', type = int, help = 'particles per depth')
-    main(parser.parse_args().ppd)
+    common.addDiffusionArgument(parser)
+    arguments = parser.parse_args()
+    main(arguments.ppd, arguments.densityDiffusion)

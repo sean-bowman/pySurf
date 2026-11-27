@@ -99,7 +99,7 @@ def surfaceGap(sph: np.ndarray, reference: np.ndarray, crestX: float, spacing: f
     both = np.concatenate([toB, toA]) / spacing
     return float(both.max()), float(np.sqrt(np.mean(both**2)))
 
-def main(ppd: int) -> dict:
+def main(ppd: int, densityDiffusion: str = 'hydrostatic') -> dict:
 
     '''Run the case at `ppd` particles per depth and report it against the criteria.'''
 
@@ -109,7 +109,7 @@ def main(ppd: int) -> dict:
     started = time.perf_counter()
     wave = BreakingWave(depth = 1.0, waveHeight = 0.6, beachSlope = slope, bathymetry = reef(), startX = 15.0,
                         particlesPerDepth = ppd, scheme = 'deltaSph', startingWave = 'serre', backend = 'gpu',
-                        frameInterval = 0.05)
+                        frameInterval = 0.05, solverOptions = {'densityDiffusion': densityDiffusion})
     wave.run(endTime = compareTime, progress = True)
 
     # The surface before impact, read on the water within 3 h0 of the boundary element crest
@@ -128,7 +128,8 @@ def main(ppd: int) -> dict:
     wave.run(progress = True, stopAt = 'touchdown')
     summary = wave.summary()
     summary['wall'] = time.perf_counter() - started
-    record = {'case': 'surfRanchOverturn', 'particlesPerDepth': ppd, 'summary': summary, 'dns': dns,
+    record = {'case': 'surfRanchOverturn', 'particlesPerDepth': ppd, 'densityDiffusion': densityDiffusion,
+              'summary': summary, 'dns': dns,
               'surface': {'compareTime': compareTime, 'largestGap': largest, 'rmsGap': rms, 'passes': surfacePasses}}
     if summary.get('touchedDown'):
         checks = {'impactX': (summary['impactX'] - dns['impactX'], 0.5, 'h0'),
@@ -149,10 +150,12 @@ def main(ppd: int) -> dict:
               f'{summary["wall"]:.0f} s', flush = True)
     else:
         print(f'{ppd} ppd: no touchdown read; the overturn criteria fail', flush = True)
-    writeResult(f'surfRanchOverturn_{ppd}', record)
+    writeResult(f'surfRanchOverturn_{ppd}' + common.diffusionSuffix(densityDiffusion), record)
     return record
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = 'Gate 1: the Surf Ranch overturn at the jet\'s landing.')
     parser.add_argument('ppd', type = int, help = 'particles per depth')
-    main(parser.parse_args().ppd)
+    common.addDiffusionArgument(parser)
+    arguments = parser.parse_args()
+    main(arguments.ppd, arguments.densityDiffusion)

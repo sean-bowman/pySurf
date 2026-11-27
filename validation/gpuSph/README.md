@@ -58,7 +58,7 @@ python extrudedReef.py compare 32 --split
 python shoalReef.py 32 --zone
 ```
 
-Each script's docstring states its case, reference, criteria and recorded result. Records go to `results/<case>_<resolution>.json`; setting `PYSURF_VALIDATION_RESULTS` sends them elsewhere, for trial runs at low resolution. `surfRanchOverturn.py` runs pySurf's boundary element model once for its reference surface (about 20 minutes) and caches it in `results/surfRanchBem.pkl`.
+Each script's docstring states its case, reference, criteria and recorded result. Records go to `results/<case>_<resolution>.json`; setting `PYSURF_VALIDATION_RESULTS` sends them elsewhere, for trial runs at low resolution. `--densityDiffusion antuono` runs a case with Antuono et al.'s (2010) diffusive term in place of the scheme's hydrostatic one, its record ending `_antuono`. With it the still tank, the solitary wave, Grilli's breaking point at 64 and 128 ppd and the Surf Ranch overturn at 128 ppd pass to the criteria they pass with the hydrostatic term; the surface before impact still fails (13.9 spacings at 128 ppd, against 14.3), and the lip's water and the energy lost in active breaking at 64 ppd read as with the hydrostatic term. The 3D cases have not been run with it. `surfRanchOverturn.py` runs pySurf's boundary element model once for its reference surface (about 20 minutes) and caches it in `results/surfRanchBem.pkl`.
 
 Cost on an RTX 2070 Super (8 GB), one run at a time:
 

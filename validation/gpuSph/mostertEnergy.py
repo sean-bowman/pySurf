@@ -68,13 +68,14 @@ budgetShareLimit = 0.1          # [-] of the mechanical energy lost, above which
 dualSphysics = {'soundSpeed': 20.0, 'smoothingLengthRatio': 1.5,
                 'solverOptions': {'negativePressure': True, 'viscosityLimiter': False, 'boundaryViscosityFactor': 1.0}}
 
-def makeWave(ppd: int, startingWave: str, settings: dict | None, energyBudget: bool = False) -> BreakingWave:
+def makeWave(ppd: int, startingWave: str, settings: dict | None, energyBudget: bool = False,
+             densityDiffusion: str = 'hydrostatic') -> BreakingWave:
 
     '''The beach run or its still-water reference, with pySurf's settings or `settings`, keeping the energy budget if asked.'''
 
     wave = BreakingWave(depth = 1.0, waveHeight = waveHeight, beachSlope = math.tan(math.radians(3.0)),
                         particlesPerDepth = ppd, scheme = 'deltaSph', backend = 'gpu', startingWave = startingWave,
-                        solverOptions = settings['solverOptions'] if settings else None,
+                        solverOptions = dict(settings['solverOptions'] if settings else {}, densityDiffusion = densityDiffusion),
                         smoothingLengthRatio = settings['smoothingLengthRatio'] if settings else None,
                         frameInterval = 0.1 * common.timeScale, energyBudget = energyBudget)
     if settings:
@@ -101,18 +102,18 @@ def reportBudget(wave: BreakingWave, still: BreakingWave) -> dict:
 
     return budget
 
-def main(ppd: int, useDualSphysics: bool, energyBudget: bool = False) -> dict:
+def main(ppd: int, useDualSphysics: bool, energyBudget: bool = False, densityDiffusion: str = 'hydrostatic') -> dict:
 
     '''Run the case at `ppd` particles per depth and report it against the criterion.'''
 
     settings = dualSphysics if useDualSphysics else None
     started = time.perf_counter()
-    still = makeWave(ppd, 'still', settings, energyBudget)
+    still = makeWave(ppd, 'still', settings, energyBudget, densityDiffusion)
     still.run(progress = False)
     stillPotential = np.array([frame.potentialEnergy for frame in still.frames])
     print(f'{ppd} ppd still water: potential energy change {stillPotential[-1] - stillPotential[0]:+.1f} J/m over the run, '
           f'{time.perf_counter() - started:.0f} s', flush = True)
-    wave = makeWave(ppd, 'exact', settings, energyBudget)
+    wave = makeWave(ppd, 'exact', settings, energyBudget, densityDiffusion)
     failure = None
     try:
         wave.run(progress = True)
@@ -123,6 +124,7 @@ def main(ppd: int, useDualSphysics: bool, energyBudget: bool = False) -> dict:
     summary = wave.summary()
     summary.update(failure = failure, wall = time.perf_counter() - started)
     record = {'case': 'mostertEnergy', 'particlesPerDepth': ppd, 'settings': 'dualSphysics' if settings else 'pySurf',
+              'densityDiffusion': densityDiffusion,
               'summary': summary, 'reference': {'shareLost': mostertShareLost}}
     try:
         dissipation = wave.breakingDissipation(reference = still)
@@ -144,8 +146,8 @@ def main(ppd: int, useDualSphysics: bool, energyBudget: bool = False) -> dict:
         print(f'{ppd} ppd: active breaking not measured ({dissipation.get("error")}); fails', flush = True)
     if energyBudget and 'energyShareLost' in dissipation:
         record['budget'] = reportBudget(wave, still)
-    writeResult(f'mostertEnergy_{ppd}' + ('_dualSphysics' if settings else '') + ('_budget' if energyBudget else ''),
-                record)
+    writeResult(f'mostertEnergy_{ppd}' + ('_dualSphysics' if settings else '') + ('_budget' if energyBudget else '')
+                + common.diffusionSuffix(densityDiffusion), record)
     return record
 
 if __name__ == '__main__':
@@ -153,5 +155,6 @@ if __name__ == '__main__':
     parser.add_argument('ppd', type = int, help = 'particles per depth')
     parser.add_argument('--dualSphysicsSettings', action = 'store_true', help = "run with DualSPHysics's settings")
     parser.add_argument('--energyBudget', action = 'store_true', help = 'keep and report the energy budget')
+    common.addDiffusionArgument(parser)
     arguments = parser.parse_args()
-    main(arguments.ppd, arguments.dualSphysicsSettings, arguments.energyBudget)
+    main(arguments.ppd, arguments.dualSphysicsSettings, arguments.energyBudget, arguments.densityDiffusion)

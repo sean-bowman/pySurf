@@ -1,0 +1,80 @@
+{
+ "case": "surfRanchOverturn",
+ "particlesPerDepth": 128,
+ "densityDiffusion": "antuono",
+ "summary": {
+  "slopeParameter": 0.1360776571673322,
+  "predictedBreakerType": "plunging",
+  "particlesPerDepth": 128,
+  "bedFitted": true,
+  "startJitter": 0.0,
+  "startSeed": 1,
+  "startPacking": false,
+  "faceArc": 2.0,
+  "fluidParticles": 756339,
+  "wallClockSeconds": 4694.584937700012,
+  "broke": true,
+  "breakingTime": 5.891734659889605,
+  "breakingIndex": 2.019081624031702,
+  "breakingHeightOverDepth": 0.7490792825157615,
+  "breakingTroughOverDepth": -0.0007338039759090531,
+  "breakingWaveHeightOverDepth": 0.7498130864916706,
+  "breakingDepthOverDepth": 0.371,
+  "breakingDistanceFromToe": 9.41015625,
+  "breakingFaceDepthOverDepth": 0.371,
+  "maxRunupOverDepth": -0.371,
+  "touchedDown": true,
+  "touchdownTime": 6.344300076573511,
+  "jetTipX": 41.99373589103376,
+  "impactX": 41.993211870119,
+  "impactHeightOverDepth": 0.635985192288576,
+  "cavityAreaOverDepthSquared": 0.13782740783062764,
+  "cavityAreaOverBreakingHeightSquared": 0.2451486785160842,
+  "pocketAreaOverDepthSquared": 0.13668276457246975,
+  "overturnAreaOverImpactHeightSquared": 0.3407544846079411,
+  "jetAreaOverImpactHeightSquared": 0.19505383987173108,
+  "overturnAspectRatio": 0.3530174817844566,
+  "overturnAngle": 29.270408679145554,
+  "wall": 5893.590045000019
+ },
+ "dns": {
+  "impactX": 42.05,
+  "impactHeightOverDepth": 0.64,
+  "overturnAreaOverImpactHeightSquared": 0.352,
+  "jetAreaOverImpactHeightSquared": 0.22,
+  "overturnAngle": 33.0
+ },
+ "surface": {
+  "compareTime": 6.281894949700848,
+  "largestGap": 13.924137375026355,
+  "rmsGap": 1.8417432254962933,
+  "passes": false
+ },
+ "overturn": {
+  "impactX": {
+   "error": -0.05678812988099935,
+   "limit": 0.5,
+   "passes": true
+  },
+  "impactHeightOverDepth": {
+   "error": -0.6273137049100042,
+   "limit": 5.0,
+   "passes": true
+  },
+  "overturnAreaOverImpactHeightSquared": {
+   "error": -3.1947486909258194,
+   "limit": 15.0,
+   "passes": true
+  },
+  "jetAreaOverImpactHeightSquared": {
+   "error": -11.339163694667686,
+   "limit": 20.0,
+   "passes": true
+  },
+  "overturnAngle": {
+   "error": -3.7295913208544462,
+   "limit": 5.0,
+   "passes": true
+  }
+ }
+}

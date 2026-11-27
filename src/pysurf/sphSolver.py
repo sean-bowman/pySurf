@@ -69,8 +69,14 @@ Six options replace parts of that scheme, and the scheme's kernel is a choice:
 
     densityDiffusion    the delta-SPH term of Molteni and Colagrossi (2009) in the continuity
                         equation, on the density less its hydrostatic part when 'hydrostatic', so
-                        water at rest is left alone (`densityDiffusionRate`). It replaces the
-                        Shepard filter.
+                        water at rest is left alone, or less the projection of the renormalized
+                        density gradients when 'antuono', so any linear density field is left
+                        alone up to a free surface (`densityDiffusionRate`). It replaces the
+                        Shepard filter. The breaking wave scenarios use 'hydrostatic'. With
+                        'antuono' the 2D gate cases in `validation/gpuSph` pass to the same
+                        criteria, and the overturn's surface before impact, its lip and the energy
+                        lost in active breaking read as with 'hydrostatic' (2026-11-27); the 3D
+                        cases have not been run with it.
     particleShifting    Lind et al. (2012) shifting with Sun et al.'s (2017) size and a free-surface
                         treatment (`shiftingDisplacement`), which keeps the particles evenly spread
                         in place of XSPH.
@@ -305,9 +311,12 @@ class SimulationConfig:
         None for no periodic axis
     densityDiffusion : str
         Diffusive term in the continuity equation (delta-SPH): 'none'; 'molteni', the term of
-        Molteni and Colagrossi (2009); or 'hydrostatic', the same term acting on the density less
-        its hydrostatic part (`densityDiffusionRate`). It replaces the Shepard filter, so runs with
-        it set `densityFilterInterval` to 0
+        Molteni and Colagrossi (2009); 'hydrostatic', the same term acting on the density less
+        its hydrostatic part; or 'antuono', the same term less the projection of the two
+        particles' renormalized density gradients on the pair, consistent up to a free surface
+        for any density field (Antuono et al. 2010; `densityDiffusionRate`,
+        `renormalizedDensityGradient`). It replaces the Shepard filter, so runs with it set
+        `densityFilterInterval` to 0
     diffusionDelta : float
         The diffusive term's coefficient delta; 0.1 is the usual value
     particleShifting : bool
@@ -641,6 +650,33 @@ def correctionMatrices(masses, densities: np.ndarray, i: np.ndarray, j: np.ndarr
 
     return corrections
 
+def renormalizedDensityGradient(masses, densities: np.ndarray, i: np.ndarray, j: np.ndarray, kernelGradients: np.ndarray,
+                                corrections: np.ndarray, isFluid: np.ndarray) -> np.ndarray:
+
+    '''
+
+    Each fluid particle's density gradient corrected by its L (`correctionMatrices`),
+    grad rho_i = sum_j V_j (rho_j - rho_i) L_i grad_i W_ij with V_j = m_j / rho_j, over every
+    neighbor, boundary particles included [kg/m^4], shape (N, dim); zero on the boundary.
+
+    Wherever L applies the sum is exact for a linear density field, a free surface included, since
+    L is built from the same neighbors. A boundary particle whose pressure is extrapolated from the
+    water (`extrapolatedWallPressure`) carries the hydrostatic density of its depth when the water
+    is at rest, so the gradient stays exact beside the walls too.
+
+    '''
+
+    count = len(densities)
+    volumes = (masses if np.ndim(masses) else np.full(count, float(masses))) / np.asarray(densities)
+    difference = densities[j] - densities[i]
+    gradients = np.zeros((count, kernelGradients.shape[1]))
+    # grad_j W_ji = -grad_i W_ij, and rho_i - rho_j = -difference, so j's share takes the same sign
+    np.add.at(gradients, i, (volumes[j] * difference)[:, None] * np.einsum('pab,pb->pa', corrections[i], kernelGradients))
+    np.add.at(gradients, j, (volumes[i] * difference)[:, None] * np.einsum('pab,pb->pa', corrections[j], kernelGradients))
+    gradients[~isFluid] = 0.0
+
+    return gradients
+
 def hydrostaticDensityDifference(verticalSeparation: np.ndarray, meanDensity: np.ndarray, referenceDensity: float,
                                  soundSpeed: float, gravity: float, exponent: float = taitExponent) -> np.ndarray:
 
@@ -663,24 +699,32 @@ def hydrostaticDensityDifference(verticalSeparation: np.ndarray, meanDensity: np
 def densityDiffusionRate(masses, densities: np.ndarray, i: np.ndarray, j: np.ndarray, separation: np.ndarray,
                          distance: np.ndarray, kernelGradients: np.ndarray, count: int, smoothingLength: float,
                          soundSpeed: float, delta: float, referenceDensity: float, gravity: float | None = None,
-                         active: np.ndarray | None = None) -> np.ndarray:
+                         active: np.ndarray | None = None, gradients: np.ndarray | None = None) -> np.ndarray:
 
     '''
 
     The delta-SPH diffusive term of the continuity equation [kg/(m^3 s)]:
 
-        D_i = delta h c0 sum_j 2 (rho_j - rho_i - rho^H_ji) (-r_ij . grad W_ij) / (r_ij^2 + 0.01 h^2) V_j
+        D_i = delta h c0 sum_j 2 (rho_j - rho_i - rho^E_ji) (-r_ij . grad W_ij) / (r_ij^2 + 0.01 h^2) V_j
 
     with r_ij = r_i - r_j and V_j = m_j / rho_j. -r_ij . grad W_ij = -r dW/dr is positive, so each
     pair moves the two densities toward each other: a Laplacian of the density, which damps the
     high-wavenumber pressure noise of weakly compressible SPH (Molteni & Colagrossi 2009).
+    rho^E_ji is the part of the pair's difference the term leaves alone:
 
-    Without gravity, rho^H_ji = 0 and this is Molteni and Colagrossi's term. That term is not
-    consistent with water at rest: next to the free surface and the bed the kernel support is
-    incomplete, its Laplacian of the hydrostatic density is not zero, and it drives a flow in still
-    water (Antuono et al. 2010). With gravity, rho^H_ji is the hydrostatic part of the pair's
-    difference (`hydrostaticDensityDifference`) and the term acts on the rest, the hydrostatic
-    subtraction of Fourtakas et al. (2019) taken at the local sound speed.
+        none        rho^E_ji = 0, Molteni and Colagrossi's term. It is not consistent with water at
+                    rest: next to the free surface and the bed the kernel support is incomplete,
+                    its Laplacian of the hydrostatic density is not zero, and it drives a flow in
+                    still water (Antuono et al. 2010).
+        gravity     the hydrostatic part of the difference (`hydrostaticDensityDifference`), the
+                    subtraction of Fourtakas et al. (2019) taken at the local sound speed. Water at
+                    rest is left alone; any other density field near a free surface is not, and the
+                    form's Laplacian still grows like 1/h there.
+        gradients   1/2 (grad rho_i + grad rho_j) . (r_j - r_i), from the renormalized gradients
+                    (`renormalizedDensityGradient`): Antuono et al.'s (2010) eq. 22, the term of
+                    delta-SPH (Marrone et al. 2011). Any linear density field is left alone wherever
+                    the gradients are exact, a free surface included, and the term converges to
+                    the Laplacian up to it.
 
     Parameters:
     -----------
@@ -705,9 +749,14 @@ def densityDiffusionRate(masses, densities: np.ndarray, i: np.ndarray, j: np.nda
         Molteni and Colagrossi's term
     active : np.ndarray | None
         Pairs that diffuse; the solver passes fluid-fluid pairs
+    gradients : np.ndarray | None
+        Each particle's renormalized density gradient (N, dim) [kg/m^4] for Antuono et al.'s
+        subtraction; not with `gravity`
 
     '''
 
+    if gravity is not None and gradients is not None:
+        raise ValueError('The hydrostatic and the gradient subtractions are alternatives; give one.')
     if active is not None:
         i, j = i[active], j[active]
         separation, distance, kernelGradients = separation[active], distance[active], kernelGradients[active]
@@ -717,6 +766,9 @@ def densityDiffusionRate(masses, densities: np.ndarray, i: np.ndarray, j: np.nda
     if gravity is not None:
         difference = difference - hydrostaticDensityDifference(separation[:, -1], 0.5 * (densities[i] + densities[j]),
                                                                referenceDensity, soundSpeed, gravity)
+    elif gradients is not None:
+        # r_j - r_i = -separation
+        difference = difference + 0.5 * np.sum((gradients[i] + gradients[j]) * separation, axis = 1)
     outward = -np.sum(separation * kernelGradients, axis = 1)
     weight = 2.0 * delta * smoothingLength * soundSpeed * difference * outward \
         / (distance**2 + viscositySoftening * smoothingLength**2)
@@ -1283,8 +1335,9 @@ class WcsphSolver:
             raise ValueError('The compiled backend has the cubic spline kernel only.')
         if config.shiftingSpeed not in ('reference', 'local'):
             raise ValueError(f"Shifting speed '{config.shiftingSpeed}' is not 'reference' or 'local'.")
-        if config.densityDiffusion not in ('none', 'molteni', 'hydrostatic'):
-            raise ValueError(f"Density diffusion '{config.densityDiffusion}' is not 'none', 'molteni' or 'hydrostatic'.")
+        if config.densityDiffusion not in ('none', 'molteni', 'hydrostatic', 'antuono'):
+            raise ValueError(f"Density diffusion '{config.densityDiffusion}' is not 'none', 'molteni', 'hydrostatic' "
+                             "or 'antuono'.")
         if config.wallPressure not in ('continuity', 'extrapolated'):
             raise ValueError(f"Wall pressure '{config.wallPressure}' is not 'continuity' or 'extrapolated'.")
         if (config.densityDiffusion != 'none' or config.particleShifting or config.wallPressure != 'continuity'
@@ -1512,19 +1565,22 @@ class WcsphSolver:
                 p.positions[fluid, 1] = np.mod(p.positions[fluid, 1], config.periodicWidth)
             return
         i, j = self._pairs
+        renormalized = config.densityDiffusion == 'antuono'
         corrections = (correctionMatrices(self._masses, p.densities, i, j, self._separation, self._kernelGradients,
-                                          fluid) if config.continuityCorrection else None)
+                                          fluid) if config.continuityCorrection or renormalized else None)
         rate = continuityRate(self._masses, p.velocities, i, j, self._kernelGradients, p.nParticles,
-                              self._fluidTouching, corrections)
+                              self._fluidTouching, corrections if config.continuityCorrection else None)
         if energy is not None:
             rateParts = self._splitContinuity(rate)
         if config.densityDiffusion != 'none':
             # The diffusion sees the densities the pressures came from, before this step's update
+            gradients = (renormalizedDensityGradient(self._masses, p.densities, i, j, self._kernelGradients, corrections,
+                                                     fluid) if renormalized else None)
             diffusion = densityDiffusionRate(self._masses, p.densities, i, j, self._separation, self._distance,
                                              self._kernelGradients, p.nParticles, self._pairLength,
                                              self._speedOfSound, config.diffusionDelta, config.referenceDensity,
                                              self._gravity if config.densityDiffusion == 'hydrostatic' else None,
-                                             ~self._boundaryPairs)
+                                             ~self._boundaryPairs, gradients)
             rate += diffusion
             if energy is not None:
                 rateParts['diffusion'] = diffusion

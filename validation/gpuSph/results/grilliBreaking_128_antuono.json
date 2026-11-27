@@ -1,0 +1,50 @@
+{
+ "case": "grilliBreaking",
+ "particlesPerDepth": 128,
+ "sortInterval": 0,
+ "densityDiffusion": "antuono",
+ "summary": {
+  "slopeParameter": 0.0793415247586055,
+  "predictedBreakerType": "plunging",
+  "particlesPerDepth": 128,
+  "bedFitted": true,
+  "startJitter": 0.0,
+  "startSeed": 1,
+  "startPacking": false,
+  "faceArc": 2.0,
+  "fluidParticles": 515824,
+  "wallClockSeconds": 4420.431748300034,
+  "broke": true,
+  "breakingTime": 8.574056177261909,
+  "breakingIndex": 1.445375608635619,
+  "breakingHeightOverDepth": 0.4865007064709017,
+  "breakingTroughOverDepth": -0.00074428633098933,
+  "breakingWaveHeightOverDepth": 0.48724499280189104,
+  "breakingDepthOverDepth": 0.33659119716994557,
+  "breakingDistanceFromToe": 23.219308099051908,
+  "breakingFaceDepthOverDepth": 0.3347371618760371,
+  "maxRunupOverDepth": -0.0031265245437012146,
+  "touchedDown": true,
+  "touchdownTime": 8.926951219579475,
+  "jetTipX": 37.36822678959987,
+  "impactX": 37.36733495259588,
+  "impactHeightOverDepth": 0.4386962034515298,
+  "cavityAreaOverDepthSquared": 0.038926100181924994,
+  "cavityAreaOverBreakingHeightSquared": 0.1639631021553795,
+  "pocketAreaOverDepthSquared": 0.03865262861199881,
+  "overturnAreaOverImpactHeightSquared": 0.20226146292452854,
+  "jetAreaOverImpactHeightSquared": 0.07656876374143992,
+  "overturnAspectRatio": 0.33377805626614016,
+  "overturnAngle": 41.277501530056476,
+  "wall": 4430.6743180999765
+ },
+ "reference": {
+  "breakingHeightOverDepth": 0.476,
+  "breakingDepthOverDepth": 0.34492753623188405
+ },
+ "verdict": {
+  "heightError": 2.2060307711978533,
+  "depthError": -2.416837795267879,
+  "passes": true
+ }
+}

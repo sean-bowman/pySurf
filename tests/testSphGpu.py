@@ -21,6 +21,7 @@ from pysurf.sphKernels import CubicSplineKernel, createKernel
 from pysurf.sphNeighbors import neighborPairs
 from pysurf.sphParticles import latticePoints
 from pysurf.sphSolver import (artificialViscosity, continuityRate, correctionMatrices, densityDiffusionRate, extrapolatedWallPressure, pairAccelerations,
+                              renormalizedDensityGradient,
                               freeSurface, limitedVelocityDifference, shepardDensity, shiftedVelocityChange, shiftingDisplacement, shiftingFields,
                               taitEquationOfState, velocityGradients, xsphVelocity)
 
@@ -178,6 +179,28 @@ def testDiffusiveContinuityMatchesTheArrayFormulation(device, dimensions, period
     pairSums.setDiffusion(mode, 0.1, c0, rho0, 9.81)
     result = pairSums.continuityRate(case['velocities'], case['densities'])
 
+    assert result == pytest.approx(expected, abs = 1e-5 * np.abs(expected).max())
+
+@pytest.mark.parametrize('device', devices)
+@pytest.mark.parametrize('dimensions, periodic', cases)
+@pytest.mark.parametrize('kernelType', kernelTypes)
+def testRenormalizedDiffusionMatchesTheArrayFormulation(device, dimensions, periodic, kernelType):
+
+    # Antuono et al.'s term with the continuity correction off: the device builds L for the gradients alone
+    case = cloud(dimensions, periodic, kernelType = kernelType)
+    i, j, fluid = case['i'], case['j'], case['isFluid']
+    corrections = correctionMatrices(case['masses'], case['densities'], i, j, case['separation'], case['gradients'], fluid)
+    gradients = renormalizedDensityGradient(case['masses'], case['densities'], i, j, case['gradients'], corrections, fluid)
+    expected = continuityRate(case['masses'], case['velocities'], i, j, case['gradients'], len(fluid), fluid[i] | fluid[j])
+    expected += densityDiffusionRate(case['masses'], case['densities'], i, j, case['separation'], case['distance'],
+                                     case['gradients'], len(fluid), case['h'], c0, 0.1, rho0, None, fluid[i] & fluid[j],
+                                     gradients)
+    pairSums = sums(case, device)
+    pairSums.setDiffusion('antuono', 0.1, c0, rho0, 9.81)
+    result = pairSums.continuityRate(case['velocities'], case['densities'])
+    deviceGradients = pairSums.densityGradients(case['densities'])
+
+    assert deviceGradients == pytest.approx(gradients, abs = 2e-4 * np.abs(gradients).max())
     assert result == pytest.approx(expected, abs = 1e-5 * np.abs(expected).max())
 
 @pytest.mark.parametrize('device', devices)
@@ -444,6 +467,45 @@ def testAHydrostaticStillTankStaysAtRest(resident):
 
     assert state.maxVelocity < 0.01 * math.sqrt(constants.gravity * fillHeight)
     assert np.max(np.abs(particles.positions[particles.isFluid] - start)) < 0.25 * tank.particleSpacing
+
+# The deltaSph scheme's continuity side: diffusion in place of the Shepard filter, walls extrapolated, L on
+deltaContinuity = dict(densityFilterInterval = 0, xsphEpsilon = 0.0, wallPressure = 'extrapolated',
+                       continuityCorrection = True, densityFloor = 0.9)
+
+@pytest.mark.parametrize('mode', ['hydrostatic', 'antuono'])
+@pytest.mark.parametrize('resident', [False, True])
+def testADeltaSphStillTankStaysAtRest(mode, resident):
+
+    # The still tank's criteria with each subtraction, from the host and on the device
+    import math
+    from pysurf import constants
+
+    solver, particles, tank = sloshingSolver('gpu', tilt = 0.0, densityDiffusion = mode, **deltaContinuity)
+    start = particles.positions[particles.isFluid].copy()
+    if resident:
+        state = solver.advance(0.2)
+    else:
+        while solver.time < 0.2:
+            state = solver.step()
+    fillHeight = tank.fillRatio * tank.tankHeight
+
+    assert state.maxVelocity < 0.01 * math.sqrt(constants.gravity * fillHeight)
+    assert np.max(np.abs(particles.positions[particles.isFluid] - start)) < 0.25 * tank.particleSpacing
+
+def testRenormalizedDiffusionStepsOnTheDeviceAsOnTheHost():
+
+    # The numpy solver's Antuono term against the device's over 30 steps of a sloshing tank, the
+    # continuity correction off so L is built for the gradients alone
+    options = dict(deltaContinuity, continuityCorrection = False, densityDiffusion = 'antuono')
+    reference, referenceParticles, _ = sloshingSolver('numpy', **options)
+    for _ in range(30):
+        reference.step()
+    device, deviceParticles, _ = sloshingSolver('gpu', **options)
+    device.advance(1.0, maxSteps = 30)
+
+    assert device.time == pytest.approx(reference.time, rel = 1e-4)
+    assert deviceParticles.positions == pytest.approx(referenceParticles.positions, abs = 1e-6)
+    assert deviceParticles.densities == pytest.approx(referenceParticles.densities, abs = 1e-3)
 
 @pytest.mark.parametrize('device', devices)
 @pytest.mark.parametrize('dimensions', [2, 3])

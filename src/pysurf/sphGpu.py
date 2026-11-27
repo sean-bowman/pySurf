@@ -110,7 +110,7 @@ layout = {'positions': wp.vec3d, 'velocities64': wp.vec3d, 'densities64': wp.flo
 # The shifting fields, about 68 bytes a particle more, made only for a run that shifts
 shiftingLayout = {'gradients': wp.vec3, 'normals': wp.vec3, 'divergence': float, 'densityGradients': wp.vec3,
                   'shifts': wp.vec3, 'densityChanges': float, 'velocityChanges': wp.vec3}
-diffusionModes = {'none': 0, 'molteni': 1, 'hydrostatic': 2}
+diffusionModes = {'none': 0, 'molteni': 1, 'hydrostatic': 2, 'antuono': 3}
 
 def budgetLayout(capacity: int) -> dict:
 
@@ -412,13 +412,15 @@ def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: w
                      diffusion: int, diffusionFactor: float, densities: wp.array(dtype = float),
                      deviations: wp.array(dtype = float), referenceDensity: float, gravityOverSound: float,
                      vertical: int, corrections: wp.array(dtype = wp.mat33), corrected: int,
-                     result: wp.array(dtype = float), budget: int, rateParts: wp.array2d(dtype = float)):
+                     densityGradients: wp.array(dtype = wp.vec3), result: wp.array(dtype = float), budget: int,
+                     rateParts: wp.array2d(dtype = float)):
 
     '''
 
     d rho_i / dt = sum_j m_j (v_i - v_j) . grad W_ij over pairs with a fluid member, and with
     `diffusion` the delta-SPH term over fluid pairs (`sphSolver.densityDiffusionRate`): 1 for
-    Molteni and Colagrossi's, 2 with the hydrostatic part subtracted. `diffusionFactor` is
+    Molteni and Colagrossi's, 2 with the hydrostatic part subtracted, 3 with the projection of the
+    renormalized `densityGradients` subtracted (`densityGradientKernel`). `diffusionFactor` is
     2 delta c0, which each pair takes times its h_ij; `deviations` are rho - rho0, so neighbors'
     differences keep their digits. With `corrected`, grad W_ij becomes L_i grad W_ij
     (`correctionKernel`). Each pair is taken at h_ij = (h_i + h_j) / 2. With `budget`, each fluid
@@ -437,8 +439,11 @@ def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: w
     boundaryI = fluid[i] == wp.uint8(0)
     diffuses = diffusion != 0 and not boundaryI
     deviationI = float(0.0)
+    gradientI = wp.vec3(0.0, 0.0, 0.0)
     if diffuses:
         deviationI = deviations[i]
+        if diffusion == 3:
+            gradientI = densityGradients[i]
     correction = wp.identity(n = 3, dtype = float)
     if corrected != 0:
         correction = corrections[i]
@@ -485,6 +490,9 @@ def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: w
                 if diffusion == 2:
                     difference -= hydrostaticDifference(d[vertical], 0.5 * (deviationI + deviationJ), referenceDensity,
                                                         gravityOverSound)
+                elif diffusion == 3:
+                    # less 1/2 (grad rho_i + grad rho_j) . (r_j - r_i), with d = r_i - r_j
+                    difference += 0.5 * wp.dot(gradientI + densityGradients[j], d)
                 increment = diffusionFactor * h * masses[j] / densities[j] * difference * (-slope * r) \
                     / (r * r + viscositySoftening * h * h)
                 total += increment
@@ -499,6 +507,52 @@ def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: w
             corrective = continuity - plainFluid - plainWall
         rateParts[i, 2] = corrective
         rateParts[i, 3] = diffusive
+
+@wp.kernel
+def densityGradientKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
+                          precise: int, period: float, kind: int, masses: wp.array(dtype = float),
+                          densities: wp.array(dtype = float), deviations: wp.array(dtype = float),
+                          fluid: wp.array(dtype = wp.uint8), lengths: wp.array(dtype = float), maxLength: float,
+                          sigmaUnit: float, dims: int, corrections: wp.array(dtype = wp.mat33),
+                          result: wp.array(dtype = wp.vec3)):
+
+    '''
+
+    `sphSolver.renormalizedDensityGradient`: grad rho_i = sum_j V_j (rho_j - rho_i) L_i grad_i W_ij over
+    every neighbor, boundary particles included, from the `deviations` rho - rho0 so the differences
+    keep their digits; zero on the boundary. Each pair is taken at h_ij = (h_i + h_j) / 2.
+
+    '''
+
+    i = wp.hash_grid_point_id(grid, wp.tid())
+    if fluid[i] == wp.uint8(0):
+        result[i] = wp.vec3(0.0, 0.0, 0.0)
+        return
+    lengthI = lengths[i]
+    reach = lengthI + maxLength
+    limit = candidateMargin * reach * reach
+    pointI = points[i]
+    lowI = lows[i]
+    deviationI = deviations[i]
+    total = wp.vec3(0.0, 0.0, 0.0)
+    for image in range(imageCount(pointI, period, reach)):
+        offset = wp.vec3(0.0, imageShift(pointI, period, image), 0.0)
+        origin = pointI + offset
+        query = wp.hash_grid_query(grid, origin, reach)
+        j = int(0)
+        while wp.hash_grid_query_next(query, j):
+            pointJ = points[j]
+            coarse = origin - pointJ
+            if wp.dot(coarse, coarse) >= limit or j == i:
+                continue
+            d = separation(coarse, pointI, pointJ, lowI, lows[j], offset, precise)
+            r = wp.length(d)
+            h = 0.5 * (lengthI + lengths[j])
+            if r >= 2.0 * h or r < 1.0e-12:
+                continue
+            slope = kernelSlope(r, h, normalization(sigmaUnit, h, dims), kind)
+            total += (masses[j] / densities[j] * (deviations[j] - deviationI) * slope / r) * d
+    result[i] = corrections[i] * total
 
 @wp.kernel
 def correctionKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
@@ -1440,6 +1494,7 @@ class PairSums:
         self.limitViscosity = False
         self.trackEnergy = False
         self._noCorrections = wp.zeros(1, dtype = wp.mat33, device = self.device)
+        self._noGradients = wp.zeros(1, dtype = wp.vec3, device = self.device)
         # Stand-ins for the energy budget's arrays while it is off
         self._noBudget = {name: wp.zeros(shape, dtype = dtype, device = self.device)
                           for name, (shape, dtype) in budgetLayout(1).items()}
@@ -1458,8 +1513,10 @@ class PairSums:
             return
         capacity = max(count, int(1.25 * self._capacity))
         fields = {**layout, **shiftingLayout} if self.shifting['enabled'] else dict(layout)
-        if self.correctContinuity:
+        if self.needsCorrections:
             fields['corrections'] = wp.mat33
+        if self.renormalizedDiffusion:
+            fields['densityGradients'] = wp.vec3
         if self.limitViscosity:
             fields['gradients'] = wp.mat33
         self._device = {name: wp.zeros(capacity, dtype = dtype, device = self.device) for name, dtype in fields.items()}
@@ -1528,12 +1585,23 @@ class PairSums:
         return [self._device['lengths'], self.maxLength, self.sigmaUnit, self.dimensions]
 
     @property
+    def renormalizedDiffusion(self) -> bool:
+        '''Whether the diffusive term subtracts the renormalized density gradients (Antuono et al. 2010).'''
+        return self.diffusion['mode'] == diffusionModes['antuono']
+
+    @property
+    def needsCorrections(self) -> bool:
+        '''Whether a step builds the correction matrices: for the continuity sum or for the density gradients.'''
+        return self.correctContinuity or self.renormalizedDiffusion
+
+    @property
     def _diffusionInputs(self) -> list:
         '''The continuity kernel's diffusion and correction arguments, after the kernel constants.'''
         d, diffusion = self._device, self.diffusion
         corrections = d['corrections'] if self.correctContinuity else self._noCorrections
+        gradients = d['densityGradients'] if self.renormalizedDiffusion else self._noGradients
         return [diffusion['mode'], diffusion['factor'], d['densities'], d['deviations'], diffusion['referenceDensity'],
-                diffusion['gravityOverSound'], self.dimensions - 1, corrections, int(self.correctContinuity)]
+                diffusion['gravityOverSound'], self.dimensions - 1, corrections, int(self.correctContinuity), gradients]
 
     def _correct(self) -> None:
 
@@ -1543,13 +1611,26 @@ class PairSums:
         self._launch(correctionKernel, self._geometry + [d['masses'], d['densities'], d['fluid']] + self._lengthInputs
                      + [1 if self.dimensions == 2 else 0, correctionFloor**self.dimensions, d['corrections']])
 
+    def _densityGradients(self) -> None:
+
+        '''This step's renormalized density gradients into 'densityGradients', after `_correct` and the deviations.'''
+
+        d = self._device
+        self._launch(densityGradientKernel, self._geometry + [d['masses'], d['densities'], d['deviations'], d['fluid']]
+                     + self._lengthInputs + [d['corrections'], d['densityGradients']])
+
+    def _allocate(self, name: str, dtype) -> None:
+        '''A per-particle device array made on its feature's first use, once the arrays exist.'''
+        if self._capacity and name not in self._device:
+            self._device[name] = wp.zeros(self._capacity, dtype = dtype, device = self.device)
+
     def setContinuityCorrection(self, enabled: bool) -> None:
 
         '''Whether the continuity sum takes the kernel gradient correction (`sphSolver.correctionMatrices`).'''
 
         self.correctContinuity = bool(enabled)
-        if enabled and self._capacity and 'corrections' not in self._device:
-            self._device['corrections'] = wp.zeros(self._capacity, dtype = wp.mat33, device = self.device)
+        if enabled:
+            self._allocate('corrections', wp.mat33)
 
     def _velocityGradients(self) -> None:
 
@@ -1639,14 +1720,28 @@ class PairSums:
 
         '''L for every particle at the current positions, shape (N, dim, dim) (`sphSolver.correctionMatrices`).'''
 
-        if not self.correctContinuity:
-            raise ValueError('The continuity correction is off; see setContinuityCorrection.')
+        if not self.needsCorrections:
+            raise ValueError('Neither the continuity correction nor the renormalized diffusion is on.')
         self._upload('densities', densities)
         self._correct()
         wp.synchronize_device(self.device)
         dim = self.dimensions
 
         return self._device['corrections'].numpy()[:self.count, :dim, :dim].astype(float)
+
+    def densityGradients(self, densities: np.ndarray) -> np.ndarray:
+
+        '''Each particle's renormalized density gradient, shape (N, dim) (`sphSolver.renormalizedDensityGradient`).'''
+
+        if not self.renormalizedDiffusion:
+            raise ValueError("The diffusive term is not 'antuono'; see setDiffusion.")
+        self._upload('densities', densities)
+        self._upload('deviations', np.asarray(densities, dtype = float) - self.diffusion['referenceDensity'])
+        self._correct()
+        self._densityGradients()
+        wp.synchronize_device(self.device)
+
+        return self._device['densityGradients'].numpy()[:self.count, :self.dimensions].astype(float)
 
     def setDiffusion(self, mode: str, delta: float, soundSpeed: float, referenceDensity: float, gravity: float) -> None:
 
@@ -1657,7 +1752,7 @@ class PairSums:
         Parameters:
         -----------
         mode : str
-            'none', 'molteni' or 'hydrostatic'
+            'none', 'molteni', 'hydrostatic' or 'antuono'
         delta : float
             The coefficient delta
         soundSpeed : float
@@ -1672,6 +1767,9 @@ class PairSums:
         # Each pair takes the factor times its own h_ij
         self.diffusion = {'mode': diffusionModes[mode], 'factor': 2.0 * delta * soundSpeed,
                           'referenceDensity': float(referenceDensity), 'gravityOverSound': gravity / soundSpeed**2}
+        if self.renormalizedDiffusion:
+            self._allocate('corrections', wp.mat33)
+            self._allocate('densityGradients', wp.vec3)
 
     def setWallPressure(self, extrapolated: bool) -> None:
 
@@ -1834,8 +1932,10 @@ class PairSums:
                 raise ValueError('The diffusive term and the correction need the densities.')
             self._upload('densities', densities)
             self._upload('deviations', np.asarray(densities, dtype = float) - self.diffusion['referenceDensity'])
-        if self.correctContinuity:
+        if self.needsCorrections:
             self._correct()
+        if self.renormalizedDiffusion:
+            self._densityGradients()
         self._launch(continuityKernel, self._geometry + [
             self._upload('velocities', velocities), self._device['masses'], self._device['fluid']]
             + self._lengthInputs + self._diffusionInputs + [self._device['scalar'], 0, self._noBudget['rateParts']])
@@ -2057,8 +2157,10 @@ class PairSums:
                             budget['accelerationParts'], d['masses'], physics['gravity'], budget['energies']])
         if self.diffusion['mode'] != 0:
             self._launch(toDeviation, [d['densities64'], self.diffusion['referenceDensity'], d['deviations']])
-        if self.correctContinuity:
+        if self.needsCorrections:
             self._correct()
+        if self.renormalizedDiffusion:
+            self._densityGradients()
         self._launch(continuityKernel, self._geometry + [d['velocities'], d['masses'], d['fluid']] + self._lengthInputs
                      + self._diffusionInputs + [d['scalar'], tracked, budget['rateParts']])
         self._launch(advanceDensity, [d['densities64'], d['scalar'], d['fluid'], timeStep, physics['densityFloor'],

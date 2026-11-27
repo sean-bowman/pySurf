@@ -68,7 +68,7 @@ def velocityGrid(field: HeightField) -> np.ndarray:
     wet = field.elevation(gridX, gridY) < z
     return np.column_stack([gridX[wet], gridY[wet], np.full(int(wet.sum()), z)])
 
-def main(k: float, ppd: int, useZone: bool, endTime: float) -> dict:
+def main(k: float, ppd: int, useZone: bool, endTime: float, densityDiffusion: str = 'hydrostatic') -> dict:
 
     '''Run the ridge at `ppd` particles per depth and report it against the criteria.'''
 
@@ -79,7 +79,8 @@ def main(k: float, ppd: int, useZone: bool, endTime: float) -> dict:
     recordTimes = (velocityTime * timeScale,) if k == 0.25 else ()
     wave = BreakingWave3D(field, 0.6, 5.785, depth = 1.0, particlesPerDepth = ppd, searchFromX = 5.225,
                           recordTimes = recordTimes, frameInterval = 0.1 * timeScale, endTime = endTime * timeScale,
-                          refinement = zone if useZone else None)
+                          refinement = zone if useZone else None,
+                          solverOptions = {'densityDiffusion': densityDiffusion})
     started = time.perf_counter()
     wave.build()
     print(f'ridge k = {k}, {ppd} ppd{" with the crest zone" if useZone else ""}: {wave.particles.nFluid} fluid particles, '
@@ -87,7 +88,8 @@ def main(k: float, ppd: int, useZone: bool, endTime: float) -> dict:
     wave.run(stopAt = 'breaking')
     summary = wave.summary()
     refTime, refX, refHeight = reference[k]
-    record = {'case': 'ridge', 'k': k, 'particlesPerDepth': ppd, 'zone': useZone, 'summary': summary,
+    record = {'case': 'ridge', 'k': k, 'particlesPerDepth': ppd, 'zone': useZone, 'densityDiffusion': densityDiffusion,
+              'summary': summary,
               'reference': {'time': refTime, 'crestX': refX, 'crestHeight': refHeight}}
 
     point = wave.breakingPoint
@@ -118,7 +120,8 @@ def main(k: float, ppd: int, useZone: bool, endTime: float) -> dict:
               f'limit 10), spanwise ratio {ratio:.3f} ({ratioError:+.1f} percent, limit 30): {verdict(passes)}', flush = True)
     print(f'{summary["fluidParticles"]} fluid particles at the end, {summary["wallClockSeconds"]:.0f} s to '
           f'{summary["time"] / timeScale:.3f} sqrt(h0/g)', flush = True)
-    writeResult(f'ridge{round(100 * k)}_{ppd}' + ('_zone' if useZone else ''), record)
+    writeResult(f'ridge{round(100 * k)}_{ppd}' + ('_zone' if useZone else '') + common.diffusionSuffix(densityDiffusion),
+                record)
     return record
 
 if __name__ == '__main__':
@@ -127,5 +130,6 @@ if __name__ == '__main__':
     parser.add_argument('ppd', type = int, help = 'particles per depth')
     parser.add_argument('--zone', action = 'store_true', help = "split the crest's water once")
     parser.add_argument('--end', type = float, default = 10.0, help = 'end time [sqrt(h0/g)]')
+    common.addDiffusionArgument(parser)
     arguments = parser.parse_args()
-    main(arguments.k, arguments.ppd, arguments.zone, arguments.end)
+    main(arguments.k, arguments.ppd, arguments.zone, arguments.end, arguments.densityDiffusion)

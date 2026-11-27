@@ -71,7 +71,7 @@ def passage(times: np.ndarray, crestXs: np.ndarray, target: float) -> float:
     gradient, intercept = np.polyfit(times[run], crestXs[run], 1)
     return (target - intercept) / gradient
 
-def main(ppd: int, useZone: bool, afterGauge: float) -> dict:
+def main(ppd: int, useZone: bool, afterGauge: float, densityDiffusion: str = 'hydrostatic') -> dict:
 
     '''Run the turned reef and set its sections beside DualSPHysics's.'''
 
@@ -83,7 +83,7 @@ def main(ppd: int, useZone: bool, afterGauge: float) -> dict:
     endTime = (gaugeX - crestX) / waveTheory.exactSolitaryWaveSpeed(height, 1.0) + afterGauge
     wave = BreakingWave3D(field, height, crestX, depth = 1.0, particlesPerDepth = ppd, sections = sections,
                           searchFromX = toeX, frameInterval = 0.1 * common.timeScale, endTime = endTime,
-                          refinement = refinement)
+                          refinement = refinement, solverOptions = {'densityDiffusion': densityDiffusion})
     started = time.perf_counter()
     wave.build()
     print(f'shoal reef, {ppd} ppd{" with the crest zone" if useZone else ""}: {wave.particles.nFluid} fluid particles, '
@@ -146,7 +146,8 @@ def main(ppd: int, useZone: bool, afterGauge: float) -> dict:
               f'{100.0 * (speed / dualSph["breakCrossingSpeed_m_s"] - 1.0):+.1f} percent against DualSPHysics\'s '
               f'{dualSph["breakCrossingSpeed_m_s"]}', flush = True)
     print(f'{summary["fluidParticles"]} fluid particles at the end, {summary["wallClockSeconds"]:.0f} s', flush = True)
-    writeResult(f'shoalReef_{ppd}' + ('_zone' if useZone else ''), record)
+    record['densityDiffusion'] = densityDiffusion
+    writeResult(f'shoalReef_{ppd}' + ('_zone' if useZone else '') + common.diffusionSuffix(densityDiffusion), record)
     return record
 
 if __name__ == '__main__':
@@ -154,5 +155,6 @@ if __name__ == '__main__':
     parser.add_argument('ppd', type = int, help = 'particles per depth')
     parser.add_argument('--zone', action = 'store_true', help = "split the crest's water once")
     parser.add_argument('--end', type = float, default = 7.0, help = 'end bound [s after the gauge]')
+    common.addDiffusionArgument(parser)
     arguments = parser.parse_args()
-    main(arguments.ppd, arguments.zone, arguments.end)
+    main(arguments.ppd, arguments.zone, arguments.end, arguments.densityDiffusion)

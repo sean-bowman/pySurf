@@ -40,6 +40,21 @@ def verdict(passes: bool) -> str:
 
     return 'passes' if passes else 'fails'
 
+diffusionTerms = ('hydrostatic', 'antuono')
+
+def addDiffusionArgument(parser) -> None:
+
+    '''The --densityDiffusion option of the gate scripts: the scheme's term, or Antuono et al.'s (roadmap item 7).'''
+
+    parser.add_argument('--densityDiffusion', choices = diffusionTerms, default = 'hydrostatic',
+                        help = "the continuity equation's diffusive term: the scheme's 'hydrostatic' or 'antuono'")
+
+def diffusionSuffix(term: str) -> str:
+
+    '''The ending a record's name takes for a diffusive term other than the scheme's.'''
+
+    return '' if term == 'hydrostatic' else f'_{term}'
+
 def writeResult(name: str, record: dict) -> Path:
 
     '''Write a run's record to results/<name>.json and return the path.'''

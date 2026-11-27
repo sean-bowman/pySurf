@@ -41,7 +41,7 @@ from pysurf.sphSolver import WcsphSolver
 from pysurf.WaterSim.scenarios import sloshingTank
 from pysurf.WaterSim.scenarios.sloshingTank import SloshingTankConfig, createSloshingTank
 
-def main(ppd: int, ordered: bool = False) -> dict:
+def main(ppd: int, ordered: bool = False, densityDiffusion: str = 'hydrostatic') -> dict:
 
     '''Run the tank at `ppd` particles per depth and report it against the criterion.'''
 
@@ -53,7 +53,7 @@ def main(ppd: int, ordered: bool = False) -> dict:
     config, particles, boundary = createSloshingTank(tank)
     config.maxTimeStep = 1e-3
     config.kernelType, config.smoothingLengthRatio = 'wendlandC2', 3.0
-    config.densityDiffusion = 'hydrostatic'
+    config.densityDiffusion = densityDiffusion
     config.densityFilterInterval = 0
     config.xsphEpsilon = 0.0
     config.alphaViscosity = 0.01
@@ -84,14 +84,15 @@ def main(ppd: int, ordered: bool = False) -> dict:
     passes = worstRms < 1e-3 and worstFastest < 1e-2
     print(f'{ppd} ppd from 20 sqrt(d/g) on: rms up to {worstRms:.1e}, fastest {worstFastest:.1e} sqrt(g d) '
           f'(limits 1e-3 and 1e-2): {verdict(passes)}; {particles.nFluid} particles', flush = True)
-    record = {'case': 'stillTank', 'particlesPerDepth': ppd, 'sorted': ordered, 'fluidParticles': int(particles.nFluid), 'readings': readings,
+    record = {'case': 'stillTank', 'particlesPerDepth': ppd, 'sorted': ordered, 'densityDiffusion': densityDiffusion, 'fluidParticles': int(particles.nFluid), 'readings': readings,
               'verdict': {'worstRms': worstRms, 'worstFastest': worstFastest, 'passes': passes}}
-    writeResult(f'stillTank_{ppd}' + ('_sorted' if ordered else ''), record)
+    writeResult(f'stillTank_{ppd}' + ('_sorted' if ordered else '') + common.diffusionSuffix(densityDiffusion), record)
     return record
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = 'Gate 1: still water stays at rest.')
     parser.add_argument('ppd', type = int, help = 'particles per depth')
     parser.add_argument('--sorted', action = 'store_true', help = 'reorder the fluid in cell order every 0.1 sqrt(d/g)')
+    common.addDiffusionArgument(parser)
     arguments = parser.parse_args()
-    main(arguments.ppd, arguments.sorted)
+    main(arguments.ppd, arguments.sorted, arguments.densityDiffusion)
