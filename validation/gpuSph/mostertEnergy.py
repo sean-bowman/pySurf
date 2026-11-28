@@ -41,9 +41,19 @@ it), and the continuity correction gives back 0.17; time stepping 0.02 to 0.03, 
 differed only in rounding read a share of 0.156 and the walls at 0.085: at 64 the walls' share sits
 near the line.
 
-    python mostertEnergy.py <ppd> [--dualSphysicsSettings] [--energyBudget]
+With --viscosity the run takes another viscosity (`common.viscosityForms`): none, the delta-LES-SPH
+closure alone, or the closure with the scheme's limited viscosity; the still reference takes the same.
+Recorded at 64 particles per depth with Antuono's term and the budget (2026-11-27): the closure alone
+loses 0.156 (the scheme with the same term 0.155), the closure with the scheme's viscosity 0.182;
+both fail. The closure moves the loss from the diffusion to the viscosity (0.66 and 0.37 of it,
+against the scheme's 0.27 and 0.66) and leaves the energy lost nearly where it was, 427 against
+429 J/m.
 
-Writes results/mostertEnergy_<ppd>[_dualSphysics][_budget].json.
+    python mostertEnergy.py <ppd> [--dualSphysicsSettings] [--energyBudget] [--densityDiffusion antuono]
+                                  [--viscosity closure]
+
+Writes results/mostertEnergy_<ppd>[_dualSphysics][_budget].json, with endings for a diffusive term or
+a viscosity other than the scheme's.
 
 Sean Bowman [11/19/2026]
 
@@ -69,13 +79,16 @@ dualSphysics = {'soundSpeed': 20.0, 'smoothingLengthRatio': 1.5,
                 'solverOptions': {'negativePressure': True, 'viscosityLimiter': False, 'boundaryViscosityFactor': 1.0}}
 
 def makeWave(ppd: int, startingWave: str, settings: dict | None, energyBudget: bool = False,
-             densityDiffusion: str = 'hydrostatic') -> BreakingWave:
+             densityDiffusion: str = 'hydrostatic', viscosity: str = 'scheme') -> BreakingWave:
 
     '''The beach run or its still-water reference, with pySurf's settings or `settings`, keeping the energy budget if asked.'''
 
+    options, alpha = common.viscositySettings(viscosity)
     wave = BreakingWave(depth = 1.0, waveHeight = waveHeight, beachSlope = math.tan(math.radians(3.0)),
                         particlesPerDepth = ppd, scheme = 'deltaSph', backend = 'gpu', startingWave = startingWave,
-                        solverOptions = dict(settings['solverOptions'] if settings else {}, densityDiffusion = densityDiffusion),
+                        solverOptions = dict(settings['solverOptions'] if settings else {}, **options,
+                                             densityDiffusion = densityDiffusion),
+                        alphaViscosity = alpha,
                         smoothingLengthRatio = settings['smoothingLengthRatio'] if settings else None,
                         frameInterval = 0.1 * common.timeScale, energyBudget = energyBudget)
     if settings:
@@ -102,18 +115,19 @@ def reportBudget(wave: BreakingWave, still: BreakingWave) -> dict:
 
     return budget
 
-def main(ppd: int, useDualSphysics: bool, energyBudget: bool = False, densityDiffusion: str = 'hydrostatic') -> dict:
+def main(ppd: int, useDualSphysics: bool, energyBudget: bool = False, densityDiffusion: str = 'hydrostatic',
+         viscosity: str = 'scheme') -> dict:
 
     '''Run the case at `ppd` particles per depth and report it against the criterion.'''
 
     settings = dualSphysics if useDualSphysics else None
     started = time.perf_counter()
-    still = makeWave(ppd, 'still', settings, energyBudget, densityDiffusion)
+    still = makeWave(ppd, 'still', settings, energyBudget, densityDiffusion, viscosity)
     still.run(progress = False)
     stillPotential = np.array([frame.potentialEnergy for frame in still.frames])
     print(f'{ppd} ppd still water: potential energy change {stillPotential[-1] - stillPotential[0]:+.1f} J/m over the run, '
           f'{time.perf_counter() - started:.0f} s', flush = True)
-    wave = makeWave(ppd, 'exact', settings, energyBudget, densityDiffusion)
+    wave = makeWave(ppd, 'exact', settings, energyBudget, densityDiffusion, viscosity)
     failure = None
     try:
         wave.run(progress = True)
@@ -124,7 +138,7 @@ def main(ppd: int, useDualSphysics: bool, energyBudget: bool = False, densityDif
     summary = wave.summary()
     summary.update(failure = failure, wall = time.perf_counter() - started)
     record = {'case': 'mostertEnergy', 'particlesPerDepth': ppd, 'settings': 'dualSphysics' if settings else 'pySurf',
-              'densityDiffusion': densityDiffusion,
+              'densityDiffusion': densityDiffusion, 'viscosity': viscosity,
               'summary': summary, 'reference': {'shareLost': mostertShareLost}}
     try:
         dissipation = wave.breakingDissipation(reference = still)
@@ -147,7 +161,7 @@ def main(ppd: int, useDualSphysics: bool, energyBudget: bool = False, densityDif
     if energyBudget and 'energyShareLost' in dissipation:
         record['budget'] = reportBudget(wave, still)
     writeResult(f'mostertEnergy_{ppd}' + ('_dualSphysics' if settings else '') + ('_budget' if energyBudget else '')
-                + common.diffusionSuffix(densityDiffusion), record)
+                + common.diffusionSuffix(densityDiffusion) + common.viscositySuffix(viscosity), record)
     return record
 
 if __name__ == '__main__':
@@ -156,5 +170,7 @@ if __name__ == '__main__':
     parser.add_argument('--dualSphysicsSettings', action = 'store_true', help = "run with DualSPHysics's settings")
     parser.add_argument('--energyBudget', action = 'store_true', help = 'keep and report the energy budget')
     common.addDiffusionArgument(parser)
+    common.addViscosityArgument(parser)
     arguments = parser.parse_args()
-    main(arguments.ppd, arguments.dualSphysicsSettings, arguments.energyBudget, arguments.densityDiffusion)
+    main(arguments.ppd, arguments.dualSphysicsSettings, arguments.energyBudget, arguments.densityDiffusion,
+         arguments.viscosity)

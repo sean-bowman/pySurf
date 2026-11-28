@@ -107,6 +107,26 @@ def testTheBudgetClosesOnTheArraySolver():
     for name in ('viscosityWall', 'shifting', 'filter', 'refinement'):
         assert budget[name] == 0.0
 
+# The delta-LES-SPH closure in Meringolo et al.'s form, alone, and with the limited viscosity
+closureForms = {'published': dict(densityDiffusion = 'antuono', turbulenceClosure = 'deltaLes', alphaViscosity = 0.0,
+                                  viscosityLimiter = False),
+                'hybrid': dict(densityDiffusion = 'antuono', turbulenceClosure = 'deltaLes')}
+
+@pytest.mark.parametrize('form', list(closureForms))
+def testTheBudgetClosesWithTheTurbulenceClosure(form):
+
+    solver = solitaryWave('numpy', **closureForms[form])
+    solver.trackEnergy()
+    start = fluidEnergy(solver)
+    for _ in range(40):
+        solver.step()
+    budget = solver.energyBudget
+
+    assert budgetGroups(budget)['total'] == pytest.approx(fluidEnergy(solver) - start, abs = 1e-9 * throughput(budget))
+    # The closure's viscosity, on every fluid pair, never feeds energy into the flow; walls stay free-slip
+    assert budget['viscosityFluid'] < 0.0
+    assert budget['viscosityWall'] == 0.0
+
 def testWithoutTheCorrectionItsTermIsZero():
 
     solver = solitaryWave('numpy', continuityCorrection = False)
@@ -204,6 +224,25 @@ def testTheDeviceBudgetFollowsTheArrayBudget():
     expected, budget = reference.energyBudget, device.energyBudget
     scale = throughput(expected)
 
+    for name in energyTerms:
+        assert budget[name] == pytest.approx(expected[name], abs = 1e-3 * scale), name
+
+@cuda
+@pytest.mark.parametrize('form', list(closureForms))
+def testTheDeviceBudgetFollowsTheArrayBudgetWithTheTurbulenceClosure(form):
+
+    reference = solitaryWave('numpy', **closureForms[form])
+    reference.trackEnergy()
+    for _ in range(40):
+        reference.step()
+    device = solitaryWave('gpu', **closureForms[form])
+    device.trackEnergy()
+    start = fluidEnergy(device)
+    device.advance(10.0, maxSteps = 40)
+    expected, budget = reference.energyBudget, device.energyBudget
+    scale = throughput(expected)
+
+    assert budgetGroups(budget)['total'] == pytest.approx(fluidEnergy(device) - start, abs = 1e-5 * throughput(budget))
     for name in energyTerms:
         assert budget[name] == pytest.approx(expected[name], abs = 1e-3 * scale), name
 

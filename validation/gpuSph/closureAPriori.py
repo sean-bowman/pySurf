@@ -74,6 +74,13 @@ from a frozen SPH flow; Mostert and Deike's 0.31 is the target of the dynamic mo
 this estimate. Its terms are checked against closed forms (the tests above) and against the
 solver's own budget (the sampling check).
 
+With the closure in the solver (`turbulenceClosure = 'deltaLes'`, `mostertEnergy.py 64 --energyBudget
+--densityDiffusion antuono --viscosity closure`, 2026-11-27) the share lost is 0.156, not 0.303, and
+the closure's two terms remove 280 and 160 J/m over active breaking, about half of what this
+estimate reads. The frozen flow's strain rates are the scheme's; the closure, once acting, damps the
+particle-scale strain it reads. The estimate overpredicts the closure's dissipation by a factor of
+about 1.9, and the flow's response leaves the total loss where the scheme has it.
+
     python closureAPriori.py <ppd> [--captures DIR] [--workers N] [--keepCaptures]
 
 Writes results/closureAPriori_<ppd>.json. The captures go to DIR/<ppd> (by default

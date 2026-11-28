@@ -24,9 +24,23 @@ short, H_I -0.9 percent, A_O/H_I² -3, A_J/H_I² -11.5, theta_O -3.6 degrees); a
 spacings apart at 32, 64 and 128: fails. The overturn area does not converge monotonically
 (0.495, 0.308, 0.341 H_I² against 0.352), so the pass at 128 is not a converged result.
 
-    python surfRanchOverturn.py <ppd>
+A reading without a criterion here: the jet's tip at touchdown, as the fluid particles with fewer
+than `detachedNeighbors` fluid neighbors inside the kernel's support (a full support holds about
+113 at h = 3 spacings in 2D, one row across it 12), counted over all the fluid and over the
+overturn's window (crest x - 3 to + 3 h0, above 0.5 h0). `--snapshot DIR` saves that window's
+particles at touchdown and at the surface comparison for a figure.
 
-Writes results/surfRanchOverturn_<ppd>.json.
+Recorded with Antuono's diffusive term at 64 particles per depth (2026-11-27), by viscosity
+(`--viscosity`): the scheme's passes four criteria (A_O/H_I² -17.0 percent fails), none passes all
+five (theta_O 33.9 degrees), the delta-LES-SPH closure alone passes four (impact x -0.06 h0; A_O/H_I²
+-22.8 percent fails), and the closure with the scheme's viscosity two (H_I, A_O/H_I² and A_J/H_I²
+fail). Every jet lands as a connected sheet: 0, 2, 0 and 0 detached particles at touchdown. The
+surfaces before impact lie 14.4, 13.6, 13.2 and 14.5 spacings apart: all fail.
+
+    python surfRanchOverturn.py <ppd> [--densityDiffusion antuono] [--viscosity closure] [--snapshot DIR]
+
+Writes results/surfRanchOverturn_<ppd>.json, with endings for a diffusive term or a viscosity other
+than the scheme's (`common.diffusionSuffix`, `common.viscositySuffix`).
 
 Sean Bowman [11/19/2026]
 
@@ -36,6 +50,7 @@ import argparse
 import math
 import pickle
 import time
+from pathlib import Path
 
 import numpy as np
 from scipy.spatial import cKDTree
@@ -51,6 +66,7 @@ from pysurf.waveBreaking import particleSurface
 dns = {'impactX': 42.05, 'impactHeightOverDepth': 0.64, 'overturnAreaOverImpactHeightSquared': 0.352,
        'jetAreaOverImpactHeightSquared': 0.22, 'overturnAngle': 33.0}
 slope, shelf, toeX, endX = 0.0693, 0.371, 30.0, 60.0
+detachedNeighbors = 12      # fewer fluid neighbors than one row across the support reads as detached
 bemCache = common.resultsDir / 'surfRanchBem.pkl'
 
 def reef() -> Bathymetry:
@@ -99,7 +115,23 @@ def surfaceGap(sph: np.ndarray, reference: np.ndarray, crestX: float, spacing: f
     both = np.concatenate([toB, toA]) / spacing
     return float(both.max()), float(np.sqrt(np.mean(both**2)))
 
-def main(ppd: int, densityDiffusion: str = 'hydrostatic') -> dict:
+def jetWindow(positions: np.ndarray, crestX: float) -> np.ndarray:
+
+    '''The fluid in the overturn's window: crest x - 3 to + 3 h0, above 0.5 h0.'''
+
+    return (positions[:, 0] > crestX - 3.0) & (positions[:, 0] < crestX + 3.0) & (positions[:, 1] > 0.5)
+
+def detachedParticles(positions: np.ndarray, support: float, crestX: float) -> dict:
+
+    '''The fluid particles with fewer than `detachedNeighbors` fluid neighbors within the support, overall and in the window.'''
+
+    neighbors = cKDTree(positions).query_ball_point(positions, support, return_length = True) - 1
+    detached = neighbors < detachedNeighbors
+    window = jetWindow(positions, crestX)
+    return {'all': int(np.count_nonzero(detached)), 'window': int(np.count_nonzero(detached & window)),
+            'windowParticles': int(np.count_nonzero(window)), 'threshold': detachedNeighbors}
+
+def main(ppd: int, densityDiffusion: str = 'hydrostatic', viscosity: str = 'scheme', snapshot: Path | None = None) -> dict:
 
     '''Run the case at `ppd` particles per depth and report it against the criteria.'''
 
@@ -107,10 +139,14 @@ def main(ppd: int, densityDiffusion: str = 'hydrostatic') -> dict:
     impactTime = reference['summary']['endTime']
     compareTime, bemSurface = min(reference['frames'], key = lambda frame: abs(frame[0] - (impactTime - 0.1 * common.timeScale)))
     started = time.perf_counter()
+    options, alpha = common.viscositySettings(viscosity)
     wave = BreakingWave(depth = 1.0, waveHeight = 0.6, beachSlope = slope, bathymetry = reef(), startX = 15.0,
                         particlesPerDepth = ppd, scheme = 'deltaSph', startingWave = 'serre', backend = 'gpu',
-                        frameInterval = 0.05, solverOptions = {'densityDiffusion': densityDiffusion})
+                        frameInterval = 0.05, alphaViscosity = alpha,
+                        solverOptions = dict(options, densityDiffusion = densityDiffusion))
     wave.run(endTime = compareTime, progress = True)
+    support = wave.solver.config.supportRadius
+    saved = {}
 
     # The surface before impact, read on the water within 3 h0 of the boundary element crest
     fluid = wave.particles.isFluid
@@ -124,13 +160,25 @@ def main(ppd: int, densityDiffusion: str = 'hydrostatic') -> dict:
     surfacePasses = largest <= 2.0
     print(f'{ppd} ppd at {compareTime:.4f} s, 0.1 sqrt(h0/g) before the boundary element impact: surfaces up to '
           f'{largest:.2f} spacings apart (rms {rms:.2f}, limit 2): {verdict(surfacePasses)}', flush = True)
+    beforeImpact = detachedParticles(positions, support, crestX)
+    saved['compare'] = positions[jetWindow(positions, crestX)]
 
     wave.run(progress = True, stopAt = 'touchdown')
     summary = wave.summary()
     summary['wall'] = time.perf_counter() - started
+    landed = wave.particles.positions[wave.particles.isFluid]
+    atTouchdown = detachedParticles(landed, support, crestX)
+    saved['touchdown'] = landed[jetWindow(landed, crestX)]
+    print(f'  detached particles (under {detachedNeighbors} fluid neighbors): {beforeImpact["all"]} before impact, '
+          f'{atTouchdown["all"]} at touchdown, {atTouchdown["window"]} of them in the overturn window', flush = True)
     record = {'case': 'surfRanchOverturn', 'particlesPerDepth': ppd, 'densityDiffusion': densityDiffusion,
-              'summary': summary, 'dns': dns,
-              'surface': {'compareTime': compareTime, 'largestGap': largest, 'rmsGap': rms, 'passes': surfacePasses}}
+              'viscosity': viscosity, 'summary': summary, 'dns': dns,
+              'surface': {'compareTime': compareTime, 'largestGap': largest, 'rmsGap': rms, 'passes': surfacePasses},
+              'detached': {'compare': beforeImpact, 'touchdown': atTouchdown}}
+    if snapshot is not None:
+        snapshot.mkdir(parents = True, exist_ok = True)
+        name = f'surfRanchOverturn_{ppd}' + common.diffusionSuffix(densityDiffusion) + common.viscositySuffix(viscosity)
+        np.savez_compressed(snapshot / f'{name}.npz', crestX = crestX, spacing = wave.spacing, bem = bemSurface, **saved)
     if summary.get('touchedDown'):
         checks = {'impactX': (summary['impactX'] - dns['impactX'], 0.5, 'h0'),
                   'impactHeightOverDepth': (percent(summary['impactHeightOverDepth'], dns['impactHeightOverDepth']), 5.0,
@@ -150,12 +198,15 @@ def main(ppd: int, densityDiffusion: str = 'hydrostatic') -> dict:
               f'{summary["wall"]:.0f} s', flush = True)
     else:
         print(f'{ppd} ppd: no touchdown read; the overturn criteria fail', flush = True)
-    writeResult(f'surfRanchOverturn_{ppd}' + common.diffusionSuffix(densityDiffusion), record)
+    writeResult(f'surfRanchOverturn_{ppd}' + common.diffusionSuffix(densityDiffusion) + common.viscositySuffix(viscosity),
+                record)
     return record
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description = 'Gate 1: the Surf Ranch overturn at the jet\'s landing.')
     parser.add_argument('ppd', type = int, help = 'particles per depth')
     common.addDiffusionArgument(parser)
+    common.addViscosityArgument(parser)
+    parser.add_argument('--snapshot', type = Path, default = None, help = "folder for the overturn window's particles")
     arguments = parser.parse_args()
-    main(arguments.ppd, arguments.densityDiffusion)
+    main(arguments.ppd, arguments.densityDiffusion, arguments.viscosity, arguments.snapshot)

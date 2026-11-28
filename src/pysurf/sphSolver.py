@@ -65,7 +65,7 @@ is under a millimeter; free-slip walls are the closer approximation, and the one
 references assume. On a solitary wave of H/d = 0.3 crossing a flat channel at 8 particles per
 depth, free-slip walls cut the crest height lost in 3 s from 0.059 d to 0.052 d.
 
-Six options replace parts of that scheme, and the scheme's kernel is a choice:
+Seven options replace parts of that scheme, and the scheme's kernel is a choice:
 
     densityDiffusion    the delta-SPH term of Molteni and Colagrossi (2009) in the continuity
                         equation, on the density less its hydrostatic part when 'hydrostatic', so
@@ -109,7 +109,20 @@ Six options replace parts of that scheme, and the scheme's kernel is a choice:
                         reconstruction removes the linear part, which leaves the term on the
                         particles' noise and on flow that varies faster than linearly across a
                         pair.
-    kernelType          'cubicSpline' with h = 1.3 spacings, or 'wendlandC2' with h = 2.5 to 3
+    turbulenceClosure   'deltaLes', the delta-LES-SPH closure of Meringolo et al. (2019), after Di
+                        Mascio et al. (2017): each fluid particle's eddy viscosity and density
+                        diffusion follow its own strain rate (`closureCoefficients`), the viscosity
+                        acting on every fluid pair, approaching or not (`closureViscosity`), and the
+                        diffusive term taking each pair's coefficient in place of `diffusionDelta`.
+                        It adds to the artificial viscosity the configuration carries: Meringolo et
+                        al.'s model sets alpha to 0 and the limiter off, and uses the 'antuono'
+                        diffusive term. In that form at 64 particles per depth (2026-11-27,
+                        `validation/gpuSph`) the Surf Ranch overturn's jet lands whole and four of its
+                        five criteria pass, as with the scheme, and the energy lost in active breaking
+                        on Mostert and Deike's beach stays at 0.156 of the wave's, against the
+                        scheme's 0.155 and their DNS's 0.31: the closure changes which term removes
+                        the energy, not how much. It is not validated on breaking waves.
+    kernelType         'cubicSpline' with h = 1.3 spacings, or 'wendlandC2' with h = 2.5 to 3
                         spacings. A fluid particle sliding over a wall of particles one spacing
                         apart feels sum_w grad W ripple along the wall: by 1.3% of its normal force
                         with the cubic spline at h = 1.3 spacings and by 0.05% with the Wendland at
@@ -159,6 +172,10 @@ Bonet, J. & Lok, T.-S.L. (1999) -- Variational and momentum preservation aspects
 Frontiere, N., Raskin, C.D. & Owen, J.M. (2017) -- CRKSPH: a conservative reproducing kernel
     smoothed particle hydrodynamics scheme, J. Comput. Phys. 332
 Rosswog, S. (2020) -- The Lagrangian hydrodynamics code MAGMA2, Mon. Not. R. Astron. Soc. 498(3)
+Di Mascio, A., Antuono, M., Colagrossi, A. & Marrone, S. (2017) -- Smoothed particle hydrodynamics
+    method from a large eddy simulation perspective, Phys. Fluids 29, 035102
+Meringolo, D.D., Marrone, S., Colagrossi, A. & Liu, Y. (2019) -- A dynamic delta-SPH model: how to
+    get rid of diffusive parameter tuning, Comput. Fluids 179, 334-355
 
 ----------------------------------------------------------------------
                             Validation status
@@ -175,7 +192,14 @@ angular momentum, and against any pair's dissipation going negative, the continu
 zero for a rigid translation, the Shepard filter against returning a uniform density unchanged, and
 a still tank initialized hydrostatically against staying at rest, the cell key against the hash
 grid's order, and a sorted run against the unsorted one up to the order of sums. tests/testSphEnergy.py
-checks the energy budget's terms against the change of the fluid's energy over the steps (closure).
+checks the energy budget's terms against the change of the fluid's energy over the steps (closure),
+with the turbulence closure on too. tests/testTurbulenceClosure.py checks the delta-LES-SPH closure:
+its coefficients against their formulas and cap, its viscous term's dissipation for a simple shear
+against the continuum's mu gamma^2 (within 2 percent), against conserving linear and angular
+momentum, against any pair feeding energy into the flow and against acting on a rigid rotation, the
+diffusive term at each pair's coefficient against the sum written out, and a still tank at rest with
+the closure alone and with the limited viscosity; tests/testClosureAPriori.py holds its terms to
+those `validation/gpuSph/closureAPriori.py` integrated a priori, to rounding.
 
 The solver is validated against the linear first-mode sloshing period of a rectangular tank in
 tests/testValidationSloshing.py, and against the first-order solitary wave celerity in
@@ -248,6 +272,14 @@ surfaceGradient: float = 0.03
 
 # A in the shift's size A h |v_i| dt when each particle's speed sets it (Skillen et al. 2013)
 localShiftingCoefficient: float = 2.0
+
+# The delta-LES-SPH closure (Meringolo et al. 2019): Smagorinsky's constant, the density diffusion's
+# constant (its authors' calibration), the filter width over h (the kernel's radius), and the cap on
+# each particle's alpha and delta, which holds the coefficients down in impacts
+closureSmagorinsky: float = 0.12
+closureDiffusion: float = 1.5
+closureFilterRatio: float = 2.0
+closureCap: float = 0.2
 
 #----------------------------------------------------------------------#
 # -- Configuration and State -- #
@@ -346,6 +378,11 @@ class SimulationConfig:
         Give the artificial viscosity each fluid pair's velocity difference less its linear part
         under a slope limiter (`limitedVelocityDifference`), so it damps the particles' noise and
         leaves a smooth flow's strain alone. Boundary pairs keep the whole difference
+    turbulenceClosure : str
+        'none', or 'deltaLes' for the delta-LES-SPH closure (Meringolo et al. 2019): an eddy
+        viscosity on every fluid pair and a density diffusion coefficient per pair, both from each
+        particle's strain rate (`closureCoefficients`, `closureViscosity`). It needs a diffusive
+        term, whose `diffusionDelta` it replaces, and adds to `alphaViscosity`'s term
     backend : str
         'numpy', the array formulation of this module; 'compiled', the same equations compiled
         with numba and run across threads (`pysurf.sphCompiled`); or 'gpu', the same sums on Warp's
@@ -384,6 +421,7 @@ class SimulationConfig:
     negativePressure: bool = False
     continuityCorrection: bool = False
     viscosityLimiter: bool = False
+    turbulenceClosure: str = 'none'
     backend: str = 'numpy'
 
     @property
@@ -698,7 +736,7 @@ def hydrostaticDensityDifference(verticalSeparation: np.ndarray, meanDensity: np
 
 def densityDiffusionRate(masses, densities: np.ndarray, i: np.ndarray, j: np.ndarray, separation: np.ndarray,
                          distance: np.ndarray, kernelGradients: np.ndarray, count: int, smoothingLength: float,
-                         soundSpeed: float, delta: float, referenceDensity: float, gravity: float | None = None,
+                         soundSpeed: float, delta: float | np.ndarray, referenceDensity: float, gravity: float | None = None,
                          active: np.ndarray | None = None, gradients: np.ndarray | None = None) -> np.ndarray:
 
     '''
@@ -742,8 +780,10 @@ def densityDiffusionRate(masses, densities: np.ndarray, i: np.ndarray, j: np.nda
         Number of particles
     smoothingLength : float | np.ndarray
         h [m], or each pair's h_ij
-    soundSpeed, delta, referenceDensity : float
-        c0 [m/s], the coefficient delta and rho0 [kg/m^3]
+    soundSpeed, referenceDensity : float
+        c0 [m/s] and rho0 [kg/m^3]
+    delta : float | np.ndarray
+        The coefficient delta, or each pair's (the delta-LES-SPH closure's delta_ij)
     gravity : float | None
         Gravity's magnitude along the last axis [m/s^2] for the hydrostatic subtraction; None for
         Molteni and Colagrossi's term
@@ -762,6 +802,8 @@ def densityDiffusionRate(masses, densities: np.ndarray, i: np.ndarray, j: np.nda
         separation, distance, kernelGradients = separation[active], distance[active], kernelGradients[active]
         if np.ndim(smoothingLength):
             smoothingLength = smoothingLength[active]
+        if np.ndim(delta):
+            delta = delta[active]
     difference = densities[j] - densities[i]
     if gravity is not None:
         difference = difference - hydrostaticDensityDifference(separation[:, -1], 0.5 * (densities[i] + densities[j]),
@@ -1187,6 +1229,102 @@ def limitedVelocityDifference(relativeVelocity: np.ndarray, separation: np.ndarr
 
     return relativeVelocity - 0.5 * limiter[:, None] * (rampI + rampJ)
 
+def closureCoefficients(gradients: np.ndarray, isFluid: np.ndarray, smoothingLength,
+                        soundSpeed: float) -> tuple[np.ndarray, np.ndarray]:
+
+    '''
+
+    Each particle's delta-LES-SPH coefficients alpha_i and delta_i (Meringolo et al. 2019), from its
+    velocity gradient:
+
+        ||D|| = sqrt(2 D:D), D = (G + G^T) / 2
+        nu_T = (C_S l)^2 ||D||,  nu_delta = (C_delta l)^2 ||D||,  l = 2h
+        alpha_i = K nu_T / (c0 h), K = 2 (n + 2);  delta_i = nu_delta / (c0 h)
+
+    each at most `closureCap`, zero on the boundary. alpha_i is the eddy viscosity in the artificial
+    viscosity's units: K nu / (c0 h) is the alpha whose term carries the viscosity nu.
+
+    Parameters:
+    -----------
+    gradients : np.ndarray
+        Each particle's velocity gradient (`velocityGradients`), shape (N, dim, dim) [1/s]
+    isFluid : np.ndarray
+        True for fluid particles, shape (N,)
+    smoothingLength : float | np.ndarray
+        h, or each particle's [m]
+    soundSpeed : float
+        c0 [m/s]
+
+    Returns:
+    --------
+    tuple[np.ndarray, np.ndarray] : alpha_i and delta_i, shape (N,)
+
+    '''
+
+    dimensions = gradients.shape[1]
+    strain = 0.5 * (gradients + np.swapaxes(gradients, 1, 2))
+    norms = np.sqrt(2.0 * np.sum(strain * strain, axis = (1, 2)))
+    h = np.broadcast_to(np.asarray(smoothingLength, dtype = float), norms.shape)
+    width = closureFilterRatio * h
+    alphas = np.minimum(2.0 * (dimensions + 2) * (closureSmagorinsky * width)**2 * norms / (soundSpeed * h), closureCap)
+    deltas = np.minimum((closureDiffusion * width)**2 * norms / (soundSpeed * h), closureCap)
+    alphas[~isFluid] = 0.0
+    deltas[~isFluid] = 0.0
+
+    return alphas, deltas
+
+def harmonicMean(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+
+    '''2 a b / (a + b), zero where both are zero.'''
+
+    total = a + b
+    return np.divide(2.0 * a * b, total, out = np.zeros_like(total, dtype = float), where = total > 0.0)
+
+def closureViscosity(relativeVelocity: np.ndarray, separation: np.ndarray, distance: np.ndarray,
+                     densitiesI: np.ndarray, densitiesJ: np.ndarray, smoothingLength, soundSpeed: float,
+                     referenceDensity: float, alphasI: np.ndarray, alphasJ: np.ndarray,
+                     kinematicViscosity: float = constants.freshwaterKinematicViscosity) -> np.ndarray:
+
+    '''
+
+    The delta-LES-SPH viscous term as each fluid pair's Pi_ij [m^5/(kg s^2)], for `pairAccelerations`:
+
+        Pi_ij = -alpha_ij c0 h rho0 (v_ij . r_ij) / (r_ij^2 rho_i rho_j)
+        alpha_ij = K nu / (c0 h) + 2 alpha_i alpha_j / (alpha_i + alpha_j)
+
+    so that a_i = (rho0 / rho_i) h c0 sum_j alpha_ij pi_ij grad_i W_ij V_j, pi_ij = (u_j - u_i) .
+    (r_j - r_i) / r^2: Meringolo et al.'s (2019) viscous term, with nu water's own viscosity. Unlike
+    Monaghan's term it acts on every pair, approaching or not, as a viscosity does; it acts along
+    r_ij, so it conserves linear and angular momentum, and each pair's power, Pi_ij v_ij . grad W_ij
+    times the two masses, is never positive. A rigid rotation, v_ij perpendicular to r_ij, feels
+    none of it.
+
+    Parameters:
+    -----------
+    relativeVelocity, separation : np.ndarray
+        v_i - v_j and x_i - x_j for each pair, shape (pairs, dim)
+    distance : np.ndarray
+        |x_i - x_j| for each pair [m]
+    densitiesI, densitiesJ : np.ndarray
+        The pair's two densities [kg/m^3]
+    smoothingLength : float | np.ndarray
+        h, or each pair's h_ij [m]
+    soundSpeed, referenceDensity : float
+        c0 [m/s] and rho0 [kg/m^3]
+    alphasI, alphasJ : np.ndarray
+        The pair's two coefficients (`closureCoefficients`)
+    kinematicViscosity : float
+        The fluid's own viscosity nu [m^2/s]
+
+    '''
+
+    dimensions = separation.shape[1]
+    pairAlpha = 2.0 * (dimensions + 2) * kinematicViscosity / (soundSpeed * smoothingLength) + harmonicMean(alphasI, alphasJ)
+    approach = np.sum(relativeVelocity * separation, axis = 1)
+    squared = np.where(distance > 1e-12, distance**2, np.inf)
+
+    return -pairAlpha * soundSpeed * smoothingLength * referenceDensity * approach / (squared * densitiesI * densitiesJ)
+
 def pairAccelerations(masses: np.ndarray, densities: np.ndarray, pressures: np.ndarray, i: np.ndarray,
                       j: np.ndarray, kernelGradients: np.ndarray, viscosity: np.ndarray,
                       count: int) -> np.ndarray:
@@ -1340,12 +1478,17 @@ class WcsphSolver:
                              "or 'antuono'.")
         if config.wallPressure not in ('continuity', 'extrapolated'):
             raise ValueError(f"Wall pressure '{config.wallPressure}' is not 'continuity' or 'extrapolated'.")
+        if config.turbulenceClosure not in ('none', 'deltaLes'):
+            raise ValueError(f"Turbulence closure '{config.turbulenceClosure}' is not 'none' or 'deltaLes'.")
+        self._closure = config.turbulenceClosure == 'deltaLes'
+        if self._closure and config.densityDiffusion == 'none':
+            raise ValueError('The delta-LES-SPH closure sets the diffusive term\'s coefficient; it needs a densityDiffusion.')
         if (config.densityDiffusion != 'none' or config.particleShifting or config.wallPressure != 'continuity'
                 or config.negativePressure or config.continuityCorrection
-                or config.viscosityLimiter) and config.backend == 'compiled':
+                or config.viscosityLimiter or self._closure) and config.backend == 'compiled':
             raise ValueError('The compiled backend has no density diffusion, particle shifting, extrapolated wall '
-                             'pressure, negative pressure, continuity correction or viscosity limiter; use the numpy '
-                             'or gpu backend.')
+                             'pressure, negative pressure, continuity correction, viscosity limiter or turbulence '
+                             'closure; use the numpy or gpu backend.')
         self._compiled = config.backend == 'compiled'
         self._gpu = None
         if self._compiled:
@@ -1371,6 +1514,8 @@ class WcsphSolver:
             self._gpu.setNegativePressure(config.negativePressure)
             self._gpu.setContinuityCorrection(config.continuityCorrection)
             self._gpu.setViscosityLimiter(config.viscosityLimiter)
+            self._gpu.setClosure(self._closure, self._speedOfSound, config.referenceDensity,
+                                 constants.freshwaterKinematicViscosity)
 
     # -- Private Helper Methods -- #
     def _updatePairs(self) -> None:
@@ -1471,9 +1616,10 @@ class WcsphSolver:
         gradients = self._kernel.gradientBatch(self._separation, self._distance, self._pairLength)
         relativeVelocity = p.velocities[i] - p.velocities[j]
         reconstructed = None
-        if config.viscosityLimiter:
+        if config.viscosityLimiter or self._closure:
             velocityGradient = velocityGradients(self._masses, p.densities, p.velocities, i, j, self._separation,
                                                  gradients, p.isFluid)
+        if config.viscosityLimiter:
             reconstructed = limitedVelocityDifference(relativeVelocity, self._separation, self._distance,
                                                       self._pairLength, velocityGradient[i], velocityGradient[j])
             reconstructed[self._boundaryPairs] = relativeVelocity[self._boundaryPairs]
@@ -1482,6 +1628,18 @@ class WcsphSolver:
                                         self._pairLength, self._speedOfSound, config.alphaViscosity, reconstructed)
         if config.boundaryViscosityFactor != 1.0:
             viscosity[self._boundaryPairs] *= config.boundaryViscosityFactor
+        if self._closure:
+            # The coefficients come from the step's starting velocities; the diffusion reuses them
+            alphas, self._closureDeltas = closureCoefficients(velocityGradient, p.isFluid,
+                                                              config.smoothingLength if p.lengths is None else p.lengths,
+                                                              self._speedOfSound)
+            fluidPairs = ~self._boundaryPairs
+            pairLength = self._pairLength[fluidPairs] if np.ndim(self._pairLength) else self._pairLength
+            fi, fj = i[fluidPairs], j[fluidPairs]
+            viscosity[fluidPairs] += closureViscosity(relativeVelocity[fluidPairs], self._separation[fluidPairs],
+                                                      self._distance[fluidPairs], p.densities[fi], p.densities[fj],
+                                                      pairLength, self._speedOfSound, config.referenceDensity,
+                                                      alphas[fi], alphas[fj])
 
         accelerations = pairAccelerations(self._masses, p.densities, p.pressures, i, j, gradients,
                                           viscosity, p.nParticles)
@@ -1576,9 +1734,11 @@ class WcsphSolver:
             # The diffusion sees the densities the pressures came from, before this step's update
             gradients = (renormalizedDensityGradient(self._masses, p.densities, i, j, self._kernelGradients, corrections,
                                                      fluid) if renormalized else None)
+            delta = (harmonicMean(self._closureDeltas[i], self._closureDeltas[j]) if self._closure
+                     else config.diffusionDelta)
             diffusion = densityDiffusionRate(self._masses, p.densities, i, j, self._separation, self._distance,
                                              self._kernelGradients, p.nParticles, self._pairLength,
-                                             self._speedOfSound, config.diffusionDelta, config.referenceDensity,
+                                             self._speedOfSound, delta, config.referenceDensity,
                                              self._gravity if config.densityDiffusion == 'hydrostatic' else None,
                                              ~self._boundaryPairs, gradients)
             rate += diffusion

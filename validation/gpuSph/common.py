@@ -55,6 +55,36 @@ def diffusionSuffix(term: str) -> str:
 
     return '' if term == 'hydrostatic' else f'_{term}'
 
+# The viscosity a case runs with, as BreakingWave's solver options and alpha (None keeps the scheme's):
+# the scheme's limited artificial viscosity; none at all; the delta-LES-SPH closure alone, Meringolo
+# et al.'s (2019) model; or the closure with the scheme's limited viscosity, a hybrid that is not the
+# published model (roadmap item 8)
+viscosityForms = {'scheme': ({}, None),
+                  'none': ({'viscosityLimiter': False}, 0.0),
+                  'closure': ({'viscosityLimiter': False, 'turbulenceClosure': 'deltaLes'}, 0.0),
+                  'hybrid': ({'turbulenceClosure': 'deltaLes'}, None)}
+
+def addViscosityArgument(parser) -> None:
+
+    '''The --viscosity option of the gate scripts (`viscosityForms`).'''
+
+    parser.add_argument('--viscosity', choices = tuple(viscosityForms), default = 'scheme',
+                        help = "the scheme's limited artificial viscosity, 'none', the delta-LES-SPH 'closure' alone, "
+                               "or the 'hybrid' of the two")
+
+def viscositySettings(form: str) -> tuple[dict, float | None]:
+
+    '''The solver options and the alpha (None for the scheme's) a viscosity form runs with.'''
+
+    options, alpha = viscosityForms[form]
+    return dict(options), alpha
+
+def viscositySuffix(form: str) -> str:
+
+    '''The ending a record's name takes for a viscosity other than the scheme's.'''
+
+    return '' if form == 'scheme' else f'_{form}'
+
 def writeResult(name: str, record: dict) -> Path:
 
     '''Write a run's record to results/<name>.json and return the path.'''

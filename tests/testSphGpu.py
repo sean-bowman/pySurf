@@ -16,11 +16,12 @@ import pytest
 
 wp = pytest.importorskip('warp')
 
-from pysurf import sphGpu
+from pysurf import constants, sphGpu
 from pysurf.sphKernels import CubicSplineKernel, createKernel
 from pysurf.sphNeighbors import neighborPairs
 from pysurf.sphParticles import latticePoints
-from pysurf.sphSolver import (artificialViscosity, continuityRate, correctionMatrices, densityDiffusionRate, extrapolatedWallPressure, pairAccelerations,
+from pysurf.sphSolver import (artificialViscosity, closureCoefficients, closureViscosity, continuityRate, correctionMatrices,
+                              densityDiffusionRate, extrapolatedWallPressure, harmonicMean, pairAccelerations,
                               renormalizedDensityGradient,
                               freeSurface, limitedVelocityDifference, shepardDensity, shiftedVelocityChange, shiftingDisplacement, shiftingFields,
                               taitEquationOfState, velocityGradients, xsphVelocity)
@@ -201,6 +202,87 @@ def testRenormalizedDiffusionMatchesTheArrayFormulation(device, dimensions, peri
     deviceGradients = pairSums.densityGradients(case['densities'])
 
     assert deviceGradients == pytest.approx(gradients, abs = 2e-4 * np.abs(gradients).max())
+    assert result == pytest.approx(expected, abs = 1e-5 * np.abs(expected).max())
+
+def strainedFlow(case: dict) -> np.ndarray:
+
+    '''A linear flow under noise over the case's cloud, so the closure's coefficients run from small to the cap.'''
+
+    positions = case['positions']
+    dimensions = positions.shape[1]
+    return (positions - positions.mean(axis = 0)) @ np.random.default_rng(11).normal(size = (dimensions, dimensions)).T \
+        + 0.3 * case['velocities']
+
+@pytest.mark.parametrize('device', devices)
+@pytest.mark.parametrize('dimensions, periodic', cases)
+@pytest.mark.parametrize('kernelType', kernelTypes)
+@pytest.mark.parametrize('limited', [False, True])
+def testClosureAccelerationsMatchTheArrayFormulation(device, dimensions, periodic, kernelType, limited):
+
+    # The closure on its own (alpha's term plain) and with the limited term, the hybrid
+    case = cloud(dimensions, periodic, kernelType = kernelType)
+    i, j, fluid, densities = case['i'], case['j'], case['isFluid'], case['densities']
+    velocities = strainedFlow(case)
+    gravity = np.zeros(dimensions)
+    gravity[-1] = -9.81
+    factor = 0.3
+    gradients = velocityGradients(case['masses'], densities, velocities, i, j, case['separation'], case['gradients'], fluid)
+    alphas, deltas = closureCoefficients(gradients, fluid, case['h'], c0)
+    relative = velocities[i] - velocities[j]
+    boundaryPairs = ~(fluid[i] & fluid[j])
+    reconstructed = None
+    if limited:
+        reconstructed = limitedVelocityDifference(relative, case['separation'], case['distance'], case['h'], gradients[i],
+                                                  gradients[j])
+        reconstructed[boundaryPairs] = relative[boundaryPairs]
+    viscosity = artificialViscosity(relative, case['separation'], case['distance'], 0.5 * (densities[i] + densities[j]),
+                                    case['h'], c0, alpha, reconstructed)
+    viscosity[boundaryPairs] *= factor
+    pairs = ~boundaryPairs
+    viscosity[pairs] += closureViscosity(relative[pairs], case['separation'][pairs], case['distance'][pairs],
+                                         densities[i[pairs]], densities[j[pairs]], case['h'], c0, rho0,
+                                         alphas[i[pairs]], alphas[j[pairs]])
+    expected = pairAccelerations(case['masses'], densities, case['pressures'], i, j, case['gradients'], viscosity, len(fluid))
+    expected[fluid] += gravity
+    expected[~fluid] = 0.0
+    pairSums = sums(case, device)
+    pairSums.setViscosityLimiter(limited)
+    pairSums.setClosure(True, c0, rho0, constants.freshwaterKinematicViscosity)
+    deviceAlphas, deviceDeltas = pairSums.closureCoefficients(velocities, densities)
+    result = pairSums.pairAccelerations(velocities, densities, case['pressures'], c0, alpha, factor, gravity)
+
+    # The deltas reach the cap somewhere, and most of the fluid carries an alpha below it (a few particles
+    # with too few neighbors keep a zero gradient, so zero coefficients)
+    assert np.max(deltas) == pytest.approx(0.2) and 0.0 < np.median(alphas[fluid]) < 0.2
+    assert deviceAlphas == pytest.approx(alphas, abs = 2e-5 * alphas.max())
+    assert deviceDeltas == pytest.approx(deltas, abs = 2e-5 * deltas.max())
+    assert result == pytest.approx(expected, abs = 1e-5 * np.abs(expected).max())
+
+@pytest.mark.parametrize('device', devices)
+@pytest.mark.parametrize('dimensions, periodic', cases)
+@pytest.mark.parametrize('mode', ['hydrostatic', 'antuono'])
+def testClosureDiffusionMatchesTheArrayFormulation(device, dimensions, periodic, mode):
+
+    # Each fluid pair's delta the harmonic mean of the two particles' closure deltas
+    case = cloud(dimensions, periodic, kernelType = 'wendlandC2')
+    i, j, fluid, densities = case['i'], case['j'], case['isFluid'], case['densities']
+    velocities = strainedFlow(case)
+    gradients = velocityGradients(case['masses'], densities, velocities, i, j, case['separation'], case['gradients'], fluid)
+    _, deltas = closureCoefficients(gradients, fluid, case['h'], c0)
+    densityGradients = None
+    if mode == 'antuono':
+        corrections = correctionMatrices(case['masses'], densities, i, j, case['separation'], case['gradients'], fluid)
+        densityGradients = renormalizedDensityGradient(case['masses'], densities, i, j, case['gradients'], corrections, fluid)
+    expected = continuityRate(case['masses'], velocities, i, j, case['gradients'], len(fluid), fluid[i] | fluid[j])
+    expected += densityDiffusionRate(case['masses'], densities, i, j, case['separation'], case['distance'], case['gradients'],
+                                     len(fluid), case['h'], c0, harmonicMean(deltas[i], deltas[j]), rho0,
+                                     9.81 if mode == 'hydrostatic' else None, fluid[i] & fluid[j], densityGradients)
+    pairSums = sums(case, device)
+    pairSums.setDiffusion(mode, 0.1, c0, rho0, 9.81)
+    pairSums.setClosure(True, c0, rho0, constants.freshwaterKinematicViscosity)
+    pairSums.closureCoefficients(velocities, densities)
+    result = pairSums.continuityRate(velocities, densities)
+
     assert result == pytest.approx(expected, abs = 1e-5 * np.abs(expected).max())
 
 @pytest.mark.parametrize('device', devices)
@@ -506,6 +588,59 @@ def testRenormalizedDiffusionStepsOnTheDeviceAsOnTheHost():
     assert device.time == pytest.approx(reference.time, rel = 1e-4)
     assert deviceParticles.positions == pytest.approx(referenceParticles.positions, abs = 1e-6)
     assert deviceParticles.densities == pytest.approx(referenceParticles.densities, abs = 1e-3)
+
+# The delta-LES-SPH closure in Meringolo et al.'s form, alone, and with the limited viscosity (the hybrid)
+closureForms = {'published': dict(deltaContinuity, densityDiffusion = 'antuono', turbulenceClosure = 'deltaLes',
+                                  alphaViscosity = 0.0),
+                'hybrid': dict(deltaContinuity, densityDiffusion = 'antuono', turbulenceClosure = 'deltaLes',
+                               alphaViscosity = 0.01, viscosityLimiter = True)}
+
+@pytest.mark.parametrize('form', list(closureForms))
+def testDeviceStepsFollowHostStepsWithTheClosure(form):
+
+    host, hostParticles, _ = sloshingSolver('gpu', **closureForms[form])
+    for _ in range(60):
+        host.step()
+    device, deviceParticles, _ = sloshingSolver('gpu', **closureForms[form])
+    device.advance(1.0, maxSteps = 60)
+
+    assert device.time == pytest.approx(host.time, rel = 1e-5)
+    assert deviceParticles.positions == pytest.approx(hostParticles.positions, abs = 1e-7)
+    assert deviceParticles.velocities == pytest.approx(hostParticles.velocities, abs = 1e-4)
+    assert deviceParticles.densities == pytest.approx(hostParticles.densities, rel = 1e-6)
+
+@pytest.mark.parametrize('form', list(closureForms))
+def testTheArraySolverFollowsTheGpuSolverWithTheClosure(form):
+
+    reference, referenceParticles, _ = sloshingSolver('numpy', **closureForms[form])
+    for _ in range(30):
+        reference.step()
+    device, deviceParticles, _ = sloshingSolver('gpu', **closureForms[form])
+    device.advance(1.0, maxSteps = 30)
+
+    assert device.time == pytest.approx(reference.time, rel = 1e-4)
+    assert deviceParticles.positions == pytest.approx(referenceParticles.positions, abs = 1e-6)
+    assert deviceParticles.velocities == pytest.approx(referenceParticles.velocities, abs = 1e-3)
+    assert deviceParticles.densities == pytest.approx(referenceParticles.densities, abs = 1e-3)
+
+@pytest.mark.parametrize('form', list(closureForms))
+@pytest.mark.parametrize('resident', [False, True])
+def testADeltaSphStillTankStaysAtRestWithTheClosure(form, resident):
+
+    # The still tank's criteria, from the host and on the device
+    import math
+
+    solver, particles, tank = sloshingSolver('gpu', tilt = 0.0, **closureForms[form])
+    start = particles.positions[particles.isFluid].copy()
+    if resident:
+        state = solver.advance(0.2)
+    else:
+        while solver.time < 0.2:
+            state = solver.step()
+    fillHeight = tank.fillRatio * tank.tankHeight
+
+    assert state.maxVelocity < 0.01 * math.sqrt(constants.gravity * fillHeight)
+    assert np.max(np.abs(particles.positions[particles.isFluid] - start)) < 0.25 * tank.particleSpacing
 
 @pytest.mark.parametrize('device', devices)
 @pytest.mark.parametrize('dimensions', [2, 3])

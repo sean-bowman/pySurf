@@ -23,10 +23,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'validation' / 'gpuSph'))
 
-from closureAPriori import (Scheme, closureCoefficients, closureDiffusivePower, closureViscousPower, harmonicMean,
-                            pairsOf, schemeDiffusionRate, schemeViscousAccelerations, strainRateNorms)
+from closureAPriori import (Scheme, closureCoefficients, closureDiffusivePower, closureViscousPower, elasticPower,
+                            harmonicMean, pairsOf, schemeDiffusionRate, schemeViscousAccelerations, strainRateNorms)
 
-from pysurf import constants, waveTheory
+from pysurf import constants, sphSolver, waveTheory
 from pysurf.bathymetry import Bathymetry
 from pysurf.sphBoundaries import BedBoundary
 from pysurf.sphEnergy import elasticSlope
@@ -170,3 +170,45 @@ def testTheSchemesTermsRebuiltFromAStateMatchTheSolversBudget():
     assert work < 0.0 and elastic != 0.0
     assert work == pytest.approx(after['viscosityFluid'] - before['viscosityFluid'], rel = 1e-9)
     assert elastic == pytest.approx(after['diffusion'] - before['diffusion'], rel = 1e-9)
+
+def testTheSolversClosureIsTheOneTheEstimateIntegrates():
+
+    # sphSolver's closure (turbulenceClosure = 'deltaLes') on a state of the solitary wave: its
+    # coefficients, the power of its viscous term and of its diffusion at each pair's delta, as the
+    # solver composes them, against the estimator's, to rounding
+    solver = solitaryWave()
+    for _ in range(30):
+        solver.step()
+    p = solver.particles
+    positions, velocities, densities = p.positions.copy(), p.velocities.copy(), p.densities.copy()
+    fluid, masses = p.isFluid.copy(), np.asarray(p.masses, dtype = float).copy()
+    current = Scheme.fromSolver(solver)
+    h, c0, rho0 = current.smoothingLength, current.soundSpeed, current.referenceDensity
+    pairs = pairsOf(positions, fluid, current)
+    norms, gradient = strainRateNorms(masses, densities, velocities, fluid, pairs)
+    alphas, deltas = closureCoefficients(norms, current)
+    solverAlphas, solverDeltas = sphSolver.closureCoefficients(gradient, fluid, h, c0)
+
+    f = pairs.fluid
+    i, j = pairs.i[f], pairs.j[f]
+    relative = velocities[i] - velocities[j]
+    viscosity = sphSolver.closureViscosity(relative, pairs.separation[f], pairs.distance[f], densities[i], densities[j],
+                                           h, c0, rho0, solverAlphas[i], solverAlphas[j], current.kinematicViscosity)
+    solverViscous = -np.sum(masses[i] * masses[j] * viscosity * np.sum(relative * pairs.gradients[f], axis = 1))
+    estimateViscous = np.sum(closureViscousPower(masses, densities, velocities, pairs, alphas, current))
+
+    corrections = sphSolver.correctionMatrices(masses, densities, pairs.i, pairs.j, pairs.separation, pairs.gradients, fluid)
+    densityGradients = sphSolver.renormalizedDensityGradient(masses, densities, pairs.i, pairs.j, pairs.gradients,
+                                                             corrections, fluid)
+    rate = sphSolver.densityDiffusionRate(masses, densities, pairs.i, pairs.j, pairs.separation, pairs.distance,
+                                          pairs.gradients, len(densities), h, c0,
+                                          sphSolver.harmonicMean(solverDeltas[pairs.i], solverDeltas[pairs.j]), rho0,
+                                          None, f, densityGradients)
+    solverDiffusive = np.sum(elasticPower(masses, densities, rate, current)[fluid])
+    estimateDiffusive = np.sum(closureDiffusivePower(masses, densities, fluid, pairs, deltas, current))
+
+    assert solverAlphas == pytest.approx(alphas, rel = 1e-12, abs = 1e-15)
+    assert solverDeltas == pytest.approx(deltas, rel = 1e-12, abs = 1e-15)
+    assert estimateViscous < 0.0
+    assert solverViscous == pytest.approx(estimateViscous, rel = 1e-10)
+    assert solverDiffusive == pytest.approx(estimateDiffusive, rel = 1e-10)

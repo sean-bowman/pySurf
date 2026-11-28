@@ -61,8 +61,10 @@ shifting takes one length throughout.
 
 Nothing here is a new model. tests/testSphGpu.py checks every sum against its array counterpart in
 `pysurf.sphSolver` on random particle clouds in 2D and 3D, with and without a periodic axis, to
-float32 rounding, on Warp's CPU device and on CUDA where present, the velocity gradients and the
-limited artificial viscosity among them, and tests/testSphRefinement.py
+float32 rounding, on Warp's CPU device and on CUDA where present, the velocity gradients, the
+limited artificial viscosity and the delta-LES-SPH closure's coefficients, viscosity and diffusion
+among them, with device steps against host steps and the array solver with the closure on, and
+tests/testSphRefinement.py
 the sums the deltaSph scheme uses on clouds of mixed smoothing lengths; the bed enforcement against
 `BedBoundary.enforce` to 1e-12 in 2D and 3D, and the height-field enforcement against
 `HeightFieldBoundary.enforce` to 1e-12; a solver run on this backend against the compiled
@@ -88,7 +90,8 @@ import warp as wp
 # Local imports
 from pysurf.sphBoundaries import BedBoundary, ContainerBoundary, HeightFieldBoundary
 from pysurf.sphEnergy import deviceTerms, secantThreshold
-from pysurf.sphSolver import (antiClumpingPower, antiClumpingWeight, correctionFloor, freeSurfaceDivergence, freeSurfaceLopsidedness,
+from pysurf.sphSolver import (antiClumpingPower, antiClumpingWeight, closureCap, closureDiffusion, closureFilterRatio,
+                              closureSmagorinsky, correctionFloor, freeSurfaceDivergence, freeSurfaceLopsidedness,
                               limiterCloseDistance, limiterFoldWidth, localShiftingCoefficient, surfaceGradient)
 
 wp.config.quiet = True
@@ -97,6 +100,10 @@ viscositySoftening = wp.constant(0.01)          # [-] as in sphSolver: mu_ij's d
 closeDistance = wp.constant(limiterCloseDistance)   # [-] of h_ij, where the limited viscosity's reconstruction fades
 foldWidth = wp.constant(limiterFoldWidth)           # [-] of h_ij, the fade's width
 candidateMargin = wp.constant(1.0001)           # [-] on r^2: float32 distances near 30 m are good to 1e-4 of a support
+# The delta-LES-SPH closure's constants, as in sphSolver: (C_S l / h)^2 and (C_delta l / h)^2, l = 2h, and the cap
+smagorinskySquared = wp.constant((closureSmagorinsky * closureFilterRatio)**2)
+diffusionSquared = wp.constant((closureDiffusion * closureFilterRatio)**2)
+coefficientCap = wp.constant(closureCap)
 elasticThreshold = wp.constant(wp.float64(secantThreshold))  # [-] of rho0, as in sphEnergy.elasticSlope
 taitExponent = 7.0                              # as in sphSolver
 maxGridCells = 2**25                            # cap on the hash grid's cells, 256 MB of cell ranges
@@ -300,17 +307,20 @@ def accelerationKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows:
                        masses: wp.array(dtype = float), fluid: wp.array(dtype = wp.uint8),
                        lengths: wp.array(dtype = float), maxLength: float, sigmaUnit: float, dims: int,
                        soundSpeed: float, alpha: float, boundaryFactor: float, gravity: wp.vec3,
-                       gradients: wp.array(dtype = wp.mat33), limited: int, result: wp.array(dtype = wp.vec3),
-                       budget: int, parts: wp.array2d(dtype = wp.vec3)):
+                       gradients: wp.array(dtype = wp.mat33), limited: int, closure: int,
+                       eddyAlphas: wp.array(dtype = float), referenceDensity: float, waterTerm: float,
+                       result: wp.array(dtype = wp.vec3), budget: int, parts: wp.array2d(dtype = wp.vec3)):
 
     '''
 
     a_i = -sum_j m_j (p_i / rho_i^2 + p_j / rho_j^2 + Pi_ij) grad W_ij + g on the fluid, zero on the
     boundary, each pair at h_ij = (h_i + h_j) / 2. With `limited`, a fluid pair's Pi_ij takes its
     velocity difference less its linear part from the velocity `gradients`
-    (`sphSolver.limitedVelocityDifference`) and acts where both differences approach. With `budget`,
-    each fluid particle's `parts` row takes its acceleration from the pressure and the viscosity of
-    fluid and of boundary neighbors, in `sphEnergy.deviceTerms` order, for the energy budget.
+    (`sphSolver.limitedVelocityDifference`) and acts where both differences approach. With `closure`,
+    every fluid pair's Pi_ij adds the delta-LES-SPH term (`sphSolver.closureViscosity`) from the
+    particles' `eddyAlphas` (`closureKernel`), `waterTerm` being K nu / c0. With `budget`, each fluid
+    particle's `parts` row takes its acceleration from the pressure and the viscosity of fluid and
+    of boundary neighbors, in `sphEnergy.deviceTerms` order, for the energy budget.
 
     '''
 
@@ -329,6 +339,9 @@ def accelerationKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows:
     gradientI = wp.mat33(0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
     if limited != 0:
         gradientI = gradients[i]
+    alphaI = float(0.0)
+    if closure != 0:
+        alphaI = eddyAlphas[i]
     total = wp.vec3(0.0, 0.0, 0.0)
     pressureFluid = wp.vec3(0.0, 0.0, 0.0)
     viscosityFluid = wp.vec3(0.0, 0.0, 0.0)
@@ -351,6 +364,7 @@ def accelerationKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows:
                 continue
             densityJ = densities[j]
             approach = wp.dot(velocityI - velocities[j], d)
+            plain = approach
             viscosity = float(0.0)
             if approach < 0.0 and limited != 0 and fluid[j] != wp.uint8(0):
                 rampI = gradientI * d
@@ -371,6 +385,15 @@ def accelerationKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows:
                 viscosity = -alpha * soundSpeed * mu / (0.5 * (densityI + densityJ))
                 if fluid[j] == wp.uint8(0):
                     viscosity = viscosity * boundaryFactor
+            if closure != 0 and fluid[j] != wp.uint8(0):
+                # alpha_ij = K nu / (c0 h_ij) + the harmonic mean of the two eddy alphas, on every pair
+                alphaJ = eddyAlphas[j]
+                both = alphaI + alphaJ
+                mean = float(0.0)
+                if both > 0.0:
+                    mean = 2.0 * alphaI * alphaJ / both
+                viscosity += -(waterTerm / h + mean) * soundSpeed * h * referenceDensity * plain \
+                    / (r * r * densityI * densityJ)
             coefficient = -(own + pressures[j] / (densityJ * densityJ) + viscosity) * masses[j]
             slope = kernelSlope(r, h, normalization(sigmaUnit, h, dims), kind)
             total += coefficient * slope / r * d
@@ -412,7 +435,8 @@ def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: w
                      diffusion: int, diffusionFactor: float, densities: wp.array(dtype = float),
                      deviations: wp.array(dtype = float), referenceDensity: float, gravityOverSound: float,
                      vertical: int, corrections: wp.array(dtype = wp.mat33), corrected: int,
-                     densityGradients: wp.array(dtype = wp.vec3), result: wp.array(dtype = float), budget: int,
+                     densityGradients: wp.array(dtype = wp.vec3), closure: int, eddyDeltas: wp.array(dtype = float),
+                     twiceSound: float, result: wp.array(dtype = float), budget: int,
                      rateParts: wp.array2d(dtype = float)):
 
     '''
@@ -421,8 +445,10 @@ def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: w
     `diffusion` the delta-SPH term over fluid pairs (`sphSolver.densityDiffusionRate`): 1 for
     Molteni and Colagrossi's, 2 with the hydrostatic part subtracted, 3 with the projection of the
     renormalized `densityGradients` subtracted (`densityGradientKernel`). `diffusionFactor` is
-    2 delta c0, which each pair takes times its h_ij; `deviations` are rho - rho0, so neighbors'
-    differences keep their digits. With `corrected`, grad W_ij becomes L_i grad W_ij
+    2 delta c0, which each pair takes times its h_ij; with `closure` each pair takes 2 c0 (that is,
+    `twiceSound`) times the harmonic mean of the two particles' `eddyDeltas` instead (`closureKernel`).
+    `deviations` are rho - rho0, so neighbors' differences keep their digits. With `corrected`,
+    grad W_ij becomes L_i grad W_ij
     (`correctionKernel`). Each pair is taken at h_ij = (h_i + h_j) / 2. With `budget`, each fluid
     particle's `rateParts` row takes the plain sum over fluid and over boundary neighbors, the
     correction's part and the diffusion, for the energy budget.
@@ -440,10 +466,13 @@ def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: w
     diffuses = diffusion != 0 and not boundaryI
     deviationI = float(0.0)
     gradientI = wp.vec3(0.0, 0.0, 0.0)
+    deltaI = float(0.0)
     if diffuses:
         deviationI = deviations[i]
         if diffusion == 3:
             gradientI = densityGradients[i]
+        if closure != 0:
+            deltaI = eddyDeltas[i]
     correction = wp.identity(n = 3, dtype = float)
     if corrected != 0:
         correction = corrections[i]
@@ -493,7 +522,14 @@ def continuityKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: w
                 elif diffusion == 3:
                     # less 1/2 (grad rho_i + grad rho_j) . (r_j - r_i), with d = r_i - r_j
                     difference += 0.5 * wp.dot(gradientI + densityGradients[j], d)
-                increment = diffusionFactor * h * masses[j] / densities[j] * difference * (-slope * r) \
+                factor = diffusionFactor
+                if closure != 0:
+                    deltaJ = eddyDeltas[j]
+                    both = deltaI + deltaJ
+                    factor = float(0.0)
+                    if both > 0.0:
+                        factor = twiceSound * 2.0 * deltaI * deltaJ / both
+                increment = factor * h * masses[j] / densities[j] * difference * (-slope * r) \
                     / (r * r + viscositySoftening * h * h)
                 total += increment
                 if tracked:
@@ -659,6 +695,32 @@ def velocityGradientKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), l
         result[i] = rises * wp.inverse(offsets)
     else:
         result[i] = zero
+
+@wp.kernel
+def closureKernel(gradients: wp.array(dtype = wp.mat33), fluid: wp.array(dtype = wp.uint8),
+                  lengths: wp.array(dtype = float), soundSpeed: float, factorK: float,
+                  alphas: wp.array(dtype = float), deltas: wp.array(dtype = float)):
+
+    '''
+
+    `sphSolver.closureCoefficients`: alpha_i = K (C_S l)^2 ||D|| / (c0 h) and delta_i =
+    (C_delta l)^2 ||D|| / (c0 h), l = 2h, ||D|| = sqrt(2 D:D) of the velocity `gradients`, each at
+    most the cap; zero on the boundary.
+
+    '''
+
+    i = wp.tid()
+    if fluid[i] == wp.uint8(0):
+        alphas[i] = 0.0
+        deltas[i] = 0.0
+        return
+    gradient = gradients[i]
+    strain = 0.5 * (gradient + wp.transpose(gradient))
+    norm = wp.sqrt(2.0 * wp.ddot(strain, strain))
+    # (C l)^2 ||D|| / (c0 h) = (C l / h)^2 h ||D|| / c0
+    scale = lengths[i] * norm / soundSpeed
+    alphas[i] = wp.min(factorK * smagorinskySquared * scale, coefficientCap)
+    deltas[i] = wp.min(diffusionSquared * scale, coefficientCap)
 
 @wp.kernel
 def xsphKernel(grid: wp.uint64, points: wp.array(dtype = wp.vec3), lows: wp.array(dtype = wp.vec3),
@@ -1492,9 +1554,11 @@ class PairSums:
         self.negativePressure = False
         self.correctContinuity = False
         self.limitViscosity = False
+        self.closure = {'enabled': False, 'soundSpeed': 1.0, 'referenceDensity': 1000.0, 'waterTerm': 0.0}
         self.trackEnergy = False
         self._noCorrections = wp.zeros(1, dtype = wp.mat33, device = self.device)
         self._noGradients = wp.zeros(1, dtype = wp.vec3, device = self.device)
+        self._noScalars = wp.zeros(1, dtype = float, device = self.device)
         # Stand-ins for the energy budget's arrays while it is off
         self._noBudget = {name: wp.zeros(shape, dtype = dtype, device = self.device)
                           for name, (shape, dtype) in budgetLayout(1).items()}
@@ -1517,9 +1581,12 @@ class PairSums:
             fields['corrections'] = wp.mat33
         if self.renormalizedDiffusion:
             fields['densityGradients'] = wp.vec3
-        if self.limitViscosity:
+        if self.needsVelocityGradients:
             fields['gradients'] = wp.mat33
-        self._device = {name: wp.zeros(capacity, dtype = dtype, device = self.device) for name, dtype in fields.items()}
+        if self.closure['enabled']:
+            fields['eddyAlphas'] = float
+            fields['eddyDeltas'] = float
+        self._device ={name: wp.zeros(capacity, dtype = dtype, device = self.device) for name, dtype in fields.items()}
         if self.trackEnergy:
             self._device.update({name: wp.zeros(shape, dtype = dtype, device = self.device)
                                  for name, (shape, dtype) in budgetLayout(capacity).items()})
@@ -1595,13 +1662,20 @@ class PairSums:
         return self.correctContinuity or self.renormalizedDiffusion
 
     @property
+    def needsVelocityGradients(self) -> bool:
+        '''Whether a step builds the velocity gradients: for the viscosity limiter or for the closure.'''
+        return self.limitViscosity or self.closure['enabled']
+
+    @property
     def _diffusionInputs(self) -> list:
-        '''The continuity kernel's diffusion and correction arguments, after the kernel constants.'''
-        d, diffusion = self._device, self.diffusion
+        '''The continuity kernel's diffusion, correction and closure arguments, after the kernel constants.'''
+        d, diffusion, closure = self._device, self.diffusion, self.closure
         corrections = d['corrections'] if self.correctContinuity else self._noCorrections
         gradients = d['densityGradients'] if self.renormalizedDiffusion else self._noGradients
+        deltas = d['eddyDeltas'] if closure['enabled'] else self._noScalars
         return [diffusion['mode'], diffusion['factor'], d['densities'], d['deviations'], diffusion['referenceDensity'],
-                diffusion['gravityOverSound'], self.dimensions - 1, corrections, int(self.correctContinuity), gradients]
+                diffusion['gravityOverSound'], self.dimensions - 1, corrections, int(self.correctContinuity), gradients,
+                int(closure['enabled']), deltas, 2.0 * closure['soundSpeed']]
 
     def _correct(self) -> None:
 
@@ -1641,19 +1715,67 @@ class PairSums:
                      + self._lengthInputs + [1 if self.dimensions == 2 else 0, correctionFloor**self.dimensions,
                                              d['gradients']])
 
+    def _closureCoefficients(self) -> None:
+
+        '''This step's eddy alphas and deltas into 'eddyAlphas' and 'eddyDeltas', after `_velocityGradients`.'''
+
+        d, closure = self._device, self.closure
+        self._launch(closureKernel, [d['gradients'], d['fluid'], d['lengths'], closure['soundSpeed'],
+                                     2.0 * (self.dimensions + 2), d['eddyAlphas'], d['eddyDeltas']])
+
+    def _viscousGradients(self) -> None:
+
+        '''The velocity gradients and the closure's coefficients a step's accelerations need, if any.'''
+
+        if self.needsVelocityGradients:
+            self._velocityGradients()
+        if self.closure['enabled']:
+            self._closureCoefficients()
+
     @property
     def _viscosityInputs(self) -> list:
-        '''The acceleration kernel's limiter arguments: the velocity gradients and the flag.'''
-        gradients = self._device['gradients'] if self.limitViscosity else self._noCorrections
-        return [gradients, int(self.limitViscosity)]
+        '''The acceleration kernel's limiter and closure arguments.'''
+        d, closure = self._device, self.closure
+        gradients = d['gradients'] if self.limitViscosity else self._noCorrections
+        alphas = d['eddyAlphas'] if closure['enabled'] else self._noScalars
+        return [gradients, int(self.limitViscosity), int(closure['enabled']), alphas, closure['referenceDensity'],
+                closure['waterTerm']]
 
     def setViscosityLimiter(self, enabled: bool) -> None:
 
         '''Whether the artificial viscosity takes the limited velocity difference (`sphSolver.limitedVelocityDifference`).'''
 
         self.limitViscosity = bool(enabled)
-        if enabled and self._capacity and 'gradients' not in self._device:
-            self._device['gradients'] = wp.zeros(self._capacity, dtype = wp.mat33, device = self.device)
+        if enabled:
+            self._allocate('gradients', wp.mat33)
+
+    def setClosure(self, enabled: bool, soundSpeed: float, referenceDensity: float, kinematicViscosity: float) -> None:
+
+        '''
+
+        Whether the accelerations and the diffusive term carry the delta-LES-SPH closure
+        (`sphSolver.closureCoefficients`, `sphSolver.closureViscosity`).
+
+        Parameters:
+        -----------
+        enabled : bool
+            The closure on or off
+        soundSpeed : float
+            c0 [m/s]
+        referenceDensity : float
+            rho0 [kg/m^3]
+        kinematicViscosity : float
+            The fluid's own viscosity nu [m^2/s], which every fluid pair's alpha_ij carries
+
+        '''
+
+        self.closure = {'enabled': bool(enabled), 'soundSpeed': float(soundSpeed),
+                        'referenceDensity': float(referenceDensity),
+                        'waterTerm': 2.0 * (self.dimensions + 2) * float(kinematicViscosity) / float(soundSpeed)}
+        if enabled:
+            self._allocate('gradients', wp.mat33)
+            self._allocate('eddyAlphas', float)
+            self._allocate('eddyDeltas', float)
 
     def setEnergyBudget(self, enabled: bool) -> None:
 
@@ -1706,8 +1828,8 @@ class PairSums:
 
         '''G for every particle at the current positions, shape (N, dim, dim) (`sphSolver.velocityGradients`).'''
 
-        if not self.limitViscosity:
-            raise ValueError('The viscosity limiter is off; see setViscosityLimiter.')
+        if not self.needsVelocityGradients:
+            raise ValueError('Neither the viscosity limiter nor the closure is on; see setViscosityLimiter, setClosure.')
         self._upload('velocities', velocities)
         self._upload('densities', densities)
         self._velocityGradients()
@@ -1715,6 +1837,20 @@ class PairSums:
         dim = self.dimensions
 
         return self._device['gradients'].numpy()[:self.count, :dim, :dim].astype(float)
+
+    def closureCoefficients(self, velocities: np.ndarray, densities: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+
+        '''Each particle's alpha_i and delta_i at the current positions (`sphSolver.closureCoefficients`).'''
+
+        if not self.closure['enabled']:
+            raise ValueError('The closure is off; see setClosure.')
+        self._upload('velocities', velocities)
+        self._upload('densities', densities)
+        self._viscousGradients()
+        wp.synchronize_device(self.device)
+        d, count = self._device, self.count
+
+        return d['eddyAlphas'].numpy()[:count].astype(float), d['eddyDeltas'].numpy()[:count].astype(float)
 
     def correctionMatrices(self, densities: np.ndarray) -> np.ndarray:
 
@@ -1915,8 +2051,7 @@ class PairSums:
         g[:self.dimensions] = gravity
         uploaded = [self._upload('velocities', velocities), self._upload('densities', densities),
                     self._upload('pressures', pressures)]
-        if self.limitViscosity:
-            self._velocityGradients()
+        self._viscousGradients()
         self._launch(accelerationKernel, self._geometry + uploaded + [self._device['masses'], self._device['fluid']]
                      + self._lengthInputs + [soundSpeed, alpha, boundaryViscosityFactor, wp.vec3(*g)]
                      + self._viscosityInputs + [self._device['vector'], 0, self._noBudget['accelerationParts']])
@@ -2126,8 +2261,7 @@ class PairSums:
             self._launch(wallPressureKernel, self._geometry + [d['fluid'], d['densities'], d['pressures']]
                          + self._lengthInputs + [physics['gravity'], physics['referenceDensity'], physics['stiffness'],
                                                  d['densities64']])
-        if self.limitViscosity:
-            self._velocityGradients()
+        self._viscousGradients()
         self._launch(accelerationKernel, self._geometry + [d['velocities'], d['densities'], d['pressures'], d['masses'],
                                                            d['fluid']] + self._lengthInputs + [
             physics['soundSpeed'], physics['alpha'], physics['boundaryViscosityFactor'], physics['gravity']]
